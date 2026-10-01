@@ -74,3 +74,5 @@ module.exports = portalScope;
 module.exports.portalOf = portalOf;
 module.exports.requestedClanId = requestedClanId;
 module.exports.PORTAL_ROLES = PORTAL_ROLES;
+
+//Room For improvement: Sanitize the clanId before returning from body/query using parseClanId, 

@@ -250,6 +250,7 @@ cp .env.example .env          # fill in DATABASE_URL and JWT secrets
 npm run db:sync               # build the schema from the models
 npm run seed:demo             # 26 mentees, 32 step roadmap, full demo data
 npm run dev
+# Set the DB_SSL= false in .env if running locally
 
 # Frontend, in a second terminal
 cd client-interface && npm install

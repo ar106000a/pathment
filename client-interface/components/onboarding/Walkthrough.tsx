@@ -7,7 +7,7 @@ import type { TourStep } from '@/lib/config/walkthroughs';
 
 interface Rect { top: number; left: number; width: number; height: number }
 
-const CARD_W = 340;
+const CARD_W = 400;
 
 /**
  * Lightweight, dependency-free spotlight tour. Dims the screen, highlights the
@@ -103,7 +103,7 @@ export function Walkthrough({ steps, onClose }: { steps: TourStep[]; onClose: ()
       )}
 
       {/* Step card */}
-      <div style={cardStyle} className="rounded-2xl glass shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] p-5">
+      <div style={cardStyle} className="rounded-2xl glass shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] p-5 ">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex items-center gap-2">
             <span className="w-7 h-7 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">

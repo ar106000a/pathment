@@ -213,6 +213,7 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+//Runs if serving this file directly from command line & not as module from another file.
 if (require.main === module) {
   start();
 }
