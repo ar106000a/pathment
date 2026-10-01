@@ -1,3 +1,13 @@
+function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+
+  if (normalized === undefined || normalized === '') {
+    return fallback;
+  }
+
+  return !['0', 'false', 'no', 'off'].includes(normalized);
+}
+
 export const siteConfig = {
   name: 'Pathment',
   description: 'AI-Powered Mentorship Platform',
@@ -5,6 +15,10 @@ export const siteConfig = {
   links: {
     github: 'https://github.com/Sheryar-Ahmed/pathment',
   },
+};
+
+export const profilePhotoConfig = {
+  requireProfilePhoto: parseBooleanEnv(process.env.NEXT_PUBLIC_REQUIRE_PROFILE_PHOTO, true),
 };
 
 export const navigationConfig = {

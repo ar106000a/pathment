@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { Loader2 } from 'lucide-react';
 import { workspacePath } from '@/lib/services/workspace-scope';
+import { profilePhotoConfig } from '@/lib/config/site';
 
 /** A profile photo is mandatory for these roles (admins are exempt). */
 const PHOTO_REQUIRED_ROLES = ['mentor', 'mentee'];
@@ -16,7 +17,8 @@ export default function OnboardingGuard({ children }: { children: React.ReactNod
   const needsOnboarding = !!user && !user.profileCompleted && user.onboardingStep !== 2;
   // Onboarding is otherwise done, but the user still owes us a profile photo.
   // This also catches EXISTING users (profileCompleted) the next time they log in.
-  const needsPhoto = !!user && user.profileCompleted
+  const needsPhoto = profilePhotoConfig.requireProfilePhoto
+    && !!user && user.profileCompleted
     && PHOTO_REQUIRED_ROLES.includes(user.role) && !user.profilePictureUrl;
 
   useEffect(() => {

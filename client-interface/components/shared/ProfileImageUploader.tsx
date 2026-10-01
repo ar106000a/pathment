@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ImagePlus, Loader2, X, ZoomIn, Check, RefreshCw } from 'lucide-react';
+import { ImagePlus, Loader2, X, ZoomIn, Check, RefreshCw, UserCircle2 } from 'lucide-react';
 import { profileApi } from '@/lib/services/profile-api';
 import { useAuth } from '@/lib/context/AuthContext';
 
@@ -31,7 +31,7 @@ export interface ProfileImageUploaderProps {
 }
 
 export function ProfileImageUploader({ open, onClose, onUploaded, currentUrl, required = false, title }: ProfileImageUploaderProps) {
-  const { updateUser } = useAuth();
+  const { updateUser,user } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
@@ -125,8 +125,15 @@ export function ProfileImageUploader({ open, onClose, onUploaded, currentUrl, re
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => { if (!required && !uploading) onClose?.(); }} />
+       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => { if (!required && !uploading) onClose?.(); }} /> 
       <div className="relative w-full max-w-md rounded-2xl bg-card border border-slate-200 shadow-xl p-6">
+        <div className="text-center mb-6 max-w-md">
+        <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-600 rounded-2xl mb-4 shadow-sm shadow-brand-200">
+          <UserCircle2 className="w-7 h-7 text-white" />
+        </div>
+        <h1 className="text-slate-900 mb-2">One last thing — add your photo</h1>
+        <p className="text-slate-600">A real photo helps your {user?.role === 'mentor' ? 'mentees' : 'mentor and clan'} recognise you across Pathment. It only takes a moment.</p>
+      </div>
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>
             <h3 className="text-slate-900 font-semibold">{title || 'Add your profile photo'}</h3>
