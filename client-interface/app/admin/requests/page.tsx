@@ -9,8 +9,9 @@ import { clanRequestsApi } from '@/lib/services/clan-requests-api';
 import { apiClient } from '@/lib/services/api-client';
 import { Drawer } from '@/components/shared/Drawer';
 import { SelectMenu } from '@/components/shared/SelectMenu';
+import { StandingClanRequests } from '@/components/shared/StandingClanRequests';
 
-type Tab = 'requests' | 'cross';
+type Tab = 'requests' | 'cross' | 'standing';
 const CROSS_KINDS = [
   { key: 'cover', label: 'Mentor cover' },
   { key: 'specialist', label: 'Specialist' },
@@ -36,7 +37,7 @@ function AdminClanRequestsInner() {
   // also switches when the user is already on the page.
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t === 'cross' || t === 'requests') setTab(t);
+    if (t === 'cross' || t === 'requests' || t === 'standing') setTab(t);
   }, [searchParams]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -95,13 +96,14 @@ function AdminClanRequestsInner() {
   const TABS: { key: Tab; label: string; count?: number }[] = [
     { key: 'requests', label: 'Change requests', count: pendingCount },
     { key: 'cross', label: 'Cross-clan' },
+    { key: 'standing', label: 'Standing clans' },
   ];
 
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
         <h1 className="text-slate-900 mb-2">Clan requests</h1>
-        <p className="text-slate-600">Mentee move requests and temporary cross-clan support.</p>
+        <p className="text-slate-600">Mentee move requests, temporary cross-clan support, and standing clan requests (also actionable from the notification bell).</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-0 border-b border-slate-200">
@@ -113,7 +115,7 @@ function AdminClanRequestsInner() {
         ))}
       </div>
 
-      {loading ? (
+      {tab === 'standing' ? <StandingClanRequests admin /> : loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 animate-spin text-brand-600" /></div>
       ) : error ? (
         <div className="bg-card rounded-2xl border border-slate-200 py-12 text-center">

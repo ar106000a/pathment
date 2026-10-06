@@ -3,6 +3,7 @@
 
 import { taskApi } from '@/lib/services/task-api';
 import { qk, useApiQuery } from '@/lib/query';
+import { useClan } from '@/lib/context/ClanContext';
 
 export interface UseTaskDetailReturn {
   task: any;
@@ -14,12 +15,25 @@ export interface UseTaskDetailReturn {
 }
 
 export function useTaskDetail(taskId: string): UseTaskDetailReturn {
+  const { menteeActiveClanId } = useClan();
+
   const { data, loading, error, errorStatus, refetch } = useApiQuery<any>({
-    queryKey: qk.me.task(taskId),
+    queryKey: qk.me.task(taskId, menteeActiveClanId),
     queryFn: async () => (await taskApi.getTaskById(taskId)).data.task,
     enabled: !!taskId,
     errorMessage: 'Failed to load task',
   });
 
-  return { task: data ?? null, loading, error: error ?? '', errorStatus, refetch };
+  // Hide Standee work when the completed cohort (or another clan) is selected.
+  const clanMismatch = Boolean(
+    data?.clanId && menteeActiveClanId && data.clanId !== menteeActiveClanId,
+  );
+
+  return {
+    task: clanMismatch ? null : (data ?? null),
+    loading,
+    error: clanMismatch ? 'This task belongs to another clan' : (error ?? ''),
+    errorStatus: clanMismatch ? 404 : errorStatus,
+    refetch,
+  };
 }

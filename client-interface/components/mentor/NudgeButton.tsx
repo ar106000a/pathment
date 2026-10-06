@@ -17,19 +17,21 @@ export function NudgeButton({
   menteeName,
   variant = 'outline',
   stopPropagation = false,
+  disabled = false,
   className = '',
 }: {
   menteeId: string;
   menteeName?: string;
   variant?: 'outline' | 'subtle' | 'icon';
   stopPropagation?: boolean;
+  disabled?: boolean;
   className?: string;
 }) {
   const [busy, setBusy] = useState(false);
 
   const send = async (e: React.MouseEvent) => {
     if (stopPropagation) { e.preventDefault(); e.stopPropagation(); }
-    if (busy) return;
+    if (busy || disabled) return;
     setBusy(true);
     try {
       await mentorApi.nudge(menteeId);
@@ -41,9 +43,11 @@ export function NudgeButton({
     }
   };
 
+  const title = disabled ? 'Completed programs are read-only' : 'Send a nudge';
+
   if (variant === 'icon') {
     return (
-      <button onClick={send} disabled={busy} title="Send a nudge" aria-label="Send a nudge"
+      <button onClick={send} disabled={busy || disabled} title={title} aria-label={title}
         className={`p-2 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-500/15 disabled:opacity-50 transition-colors ${className}`}>
         {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
       </button>
@@ -55,7 +59,7 @@ export function NudgeButton({
     : 'border border-slate-200 text-slate-700 hover:border-brand-300 hover:text-brand-700';
 
   return (
-    <button onClick={send} disabled={busy}
+    <button onClick={send} disabled={busy || disabled} title={disabled ? 'Completed programs are read-only' : undefined}
       className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors ${styles} ${className}`}>
       {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}Nudge
     </button>

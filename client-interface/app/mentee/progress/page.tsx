@@ -56,6 +56,7 @@ function MyRoadmapsSection() {
 }
 
 export default function MenteeProgress() {
+  // Same progress screen for standing and cohort — getMyProgress is clan-scoped via X-Active-Clan.
   const { progress, loading, error, refetch } = useMyProgress();
 
   if (loading) {

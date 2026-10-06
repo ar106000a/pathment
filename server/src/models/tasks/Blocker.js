@@ -11,6 +11,7 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true
     },
     organizationId: { type: DataTypes.UUID, allowNull: false, field: 'organization_id' },
+    clanId: { type: DataTypes.UUID, allowNull: true, field: 'clan_id' },
     menteeId: {
       type: DataTypes.UUID,
       allowNull: false,

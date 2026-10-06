@@ -14,11 +14,14 @@ class RewardsService {
    * clan was shown the names of mentees in clans they have nothing to do with.
    * Pass no viewer and it stays org wide, which is what an admin screen wants.
    */
-  async overview(viewer = null) {
-    const scopeToClans = viewer && !(await require('./authzService').can(viewer, require('../config/permissions').PERMISSIONS.MENTEE_VIEW, { orgWide: true }));
+  async overview(viewer = null, portalRole = null) {
+    const selfView = viewer && (portalRole === 'mentee' || (!portalRole && viewer.role === 'mentee'));
+    const scopeToClans = viewer && !selfView && !(await require('./authzService').can(viewer, require('../config/permissions').PERMISSIONS.MENTEE_VIEW, { orgWide: true }));
 
     let menteeIds = null;
-    if (scopeToClans) {
+    if (selfView) {
+      menteeIds = [viewer.id];
+    } else if (scopeToClans) {
       const mine = await models.ClanMembership.findAll({
         where: { userId: viewer.id, status: 'active' },
         attributes: ['clanId']

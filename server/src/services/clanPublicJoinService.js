@@ -744,6 +744,8 @@ class ClanPublicJoinService {
       transaction
     });
     if (!clan) throw new NotFoundError('Clan not found');
+    // Standing clans use the same public-join flow as cohorts; membership is
+    // still created via clanService.addMember (enrollmentId stays null).
     return clan;
   }
 

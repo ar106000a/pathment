@@ -195,7 +195,7 @@ class OrganizationService {
       const plan = row.toJSON();
       return { ...plan,
         limits: Object.fromEntries(['members', 'programs', 'clans'].map(key => [key, plan.limits[key]])),
-        features: Object.fromEntries(['certificates', 'aiEvaluation', 'advancedAnalytics']
+        features: Object.fromEntries(['certificates', 'aiEvaluation', 'advancedAnalytics', 'programCompletionStanding']
           .map(key => [key, Boolean(plan.features[key])])),
       };
     });
@@ -244,7 +244,21 @@ class OrganizationService {
 
   async entitlement(organizationId, feature) {
     const { plan } = await this.subscription(organizationId);
+    if (feature === 'programCompletionStanding') {
+      // Standing-clan requests only. Program closeout is not plan-gated.
+      if (typeof plan.features?.programCompletionStanding === 'boolean') {
+        return plan.features.programCompletionStanding;
+      }
+      // Until features JSON is migrated: paid price → enabled, free/Starter → not.
+      return Number(plan.monthlyPriceCents || 0) > 0 || Number(plan.annualPriceCents || 0) > 0;
+    }
     return Boolean(plan.features?.[feature]);
+  }
+
+  async requireEntitlement(organizationId, feature, message) {
+    if (!await this.entitlement(organizationId, feature)) {
+      throw new ForbiddenError(message || 'This feature is not included in your current plan');
+    }
   }
 
   async assertLimit(organizationId, resource, currentValue = null, options = {}) {

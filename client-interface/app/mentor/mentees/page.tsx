@@ -2,7 +2,7 @@
 import { Avatar } from '@/components/shared/Avatar';
 
 import { useMemo, useState } from 'react';
-import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
+import { useClan, ALL_CLANS, isHistoricalMentorScope } from '@/lib/context/ClanContext';
 import { usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Suspense } from 'react';
@@ -40,8 +40,9 @@ function MentorMentees() {
   const { cohort, totals, hiddenByClan, loading, error, refetch } =
     useMentorCohort();
   const { clans: mentoredClans, activeClanId, setActiveClanId } = useClan();
-  const activeClanName =
-    mentoredClans.find((c) => c.id === activeClanId)?.name ?? null;
+  const activeClan = mentoredClans.find((c) => c.id === activeClanId) ?? null;
+  const activeClanName = activeClan?.name ?? null;
+  const historical = isHistoricalMentorScope(mentoredClans, activeClanId);
   const [search, setSearch] = useState('');
   const requestedFilter = params.get('filter');
   const filter: Filter = [
@@ -142,7 +143,7 @@ function MentorMentees() {
           Manage inactive &amp; paused mentees
         </summary>
         <div className="mt-4">
-          <PausedMenteesPanel />
+          <PausedMenteesPanel key={activeClanId} />
         </div>
       </details>
 
@@ -244,7 +245,9 @@ function MentorMentees() {
               </p>
               <button
                 onClick={() => setAssign({ mode: 'bulk' })}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium shrink-0"
+                disabled={historical}
+                title={historical ? 'Completed programs are read-only' : undefined}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium shrink-0 disabled:opacity-50"
               >
                 <ListPlus className="w-4 h-4" />
                 Assign to all {filtered.length}
@@ -361,7 +364,9 @@ function MentorMentees() {
                             mentee: { id: m.id, name: m.name, risk: m.risk },
                           })
                         }
-                        className="whitespace-nowrap rounded-lg border border-border px-3 py-2 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                        disabled={historical}
+                        title={historical ? 'Completed programs are read-only' : undefined}
+                        className="whitespace-nowrap rounded-lg border border-border px-3 py-2 text-xs font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50"
                       >
                         Assign work
                       </button>

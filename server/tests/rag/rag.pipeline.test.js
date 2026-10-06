@@ -42,7 +42,9 @@ const ingestionService = require('../../src/features/rag/services/ingestionServi
 const promptBuilder = require('../../src/features/rag/services/promptBuilder');
 const ingestionWorker = require('../../src/features/rag/workers/ingestionWorker');
 const learningWorker = require('../../src/features/rag/workers/learningWorker');
+const learningService = require('../../src/features/rag/services/learningService');
 const embeddingService = require('../../src/features/rag/services/embeddingService');
+const { cleanDb, createMentor, createMentee } = require('../helpers/seed');
 
 describe('RAG Pipeline E2E (Mocked)', () => {
   let mentorId;
@@ -51,16 +53,11 @@ describe('RAG Pipeline E2E (Mocked)', () => {
   let groqKey = 'my-groq-key';
 
   beforeAll(async () => {
-    // Instead of dropping 90+ tables remotely (which causes deadlocks/timeouts), just clean the tables we need
-    await KnowledgeChunk.destroy({ where: {} });
-    await RagIngestionJob.destroy({ where: {} });
-    await MessageDraft.destroy({ where: {} });
-    await MentorEditHistory.destroy({ where: {} });
-    await MentorStyleProfile.destroy({ where: {} });
-    await AIConnection.destroy({ where: {} });
-
-    mentorId = 'a1b2c3d4-a1b2-c3d4-e5f6-a1b2c3d4e5f6';
-    menteeId = 'f6e5d4c3-b2a1-d4c3-b2a1-f6e5d4c3b2a1';
+    // Establish a real workspace context and real users. Tenant-owned RAG rows
+    // can no longer be written against made-up user IDs without an organization.
+    await cleanDb();
+    mentorId = (await createMentor({ email: 'rag-mentor@test.com' })).id;
+    menteeId = (await createMentee({ email: 'rag-mentee@test.com' })).id;
 
     // 1. Setup API Keys
     const userObj = { id: mentorId };
@@ -68,7 +65,11 @@ describe('RAG Pipeline E2E (Mocked)', () => {
     const groqConn = await aiConnectionService.create({ provider: 'groq', key: groqKey, label: 'Groq' }, userObj);
 
     // Pass both routing keys so one doesn't overwrite the other
-    await aiConnectionService.setRouting(userObj, { rag_embedding: geminiConn.id, rag_generation: groqConn.id });
+    await aiConnectionService.setRouting(userObj, {
+      rag_embedding: geminiConn.id,
+      rag_generation: groqConn.id,
+      rag_grounding: geminiConn.id,
+    });
 
     // Save these globally so tests can restore them
     global.geminiConnId = geminiConn.id;
@@ -99,9 +100,9 @@ describe('RAG Pipeline E2E (Mocked)', () => {
   // 1. Retrieval
   test('[Retrieval] Should return relevant chunk using Vector + FTS and RRF', async () => {
     await KnowledgeChunk.bulkCreate([
-      { mentorId, content: 'This is about React hooks.', embedding: `[${new Array(768).fill(0.1).join(',')}]` },
-      { mentorId, content: 'Apples are fruits.', embedding: `[${new Array(768).fill(0.1).join(',')}]` },
-      { mentorId, content: 'React components manage state.', embedding: `[${new Array(768).fill(0.1).join(',')}]` }
+      { mentorId, sourceType: 'mentor_document', content: 'This is about React hooks.', embedding: `[${new Array(768).fill(0.1).join(',')}]` },
+      { mentorId, sourceType: 'mentor_document', content: 'Apples are fruits.', embedding: `[${new Array(768).fill(0.1).join(',')}]` },
+      { mentorId, sourceType: 'mentor_document', content: 'React components manage state.', embedding: `[${new Array(768).fill(0.1).join(',')}]` }
     ]);
 
     const results = await retrievalService.retrieveContext({ query: 'React state', mentorId, geminiApiKey: geminiKey });
@@ -354,9 +355,8 @@ describe('RAG Pipeline E2E (Mocked)', () => {
         status: 'pending'
       });
 
-      // Mock embeddingService to throw error
-      const embeddingService = require('../../src/features/rag/services/embeddingService');
-      embeddingService.embedText.mockRejectedValueOnce(new Error('Simulated Gemini API Failure'));
+      jest.spyOn(learningService, 'processEdit')
+        .mockRejectedValueOnce(new Error('Simulated Gemini API Failure'));
 
       await learningWorker.tick();
 
@@ -379,7 +379,11 @@ describe('RAG Pipeline E2E (Mocked)', () => {
     let messageObj;
 
     beforeEach(() => {
+      jest.restoreAllMocks();
       jest.clearAllMocks();
+      jest.spyOn(retrievalService, 'retrieveContext').mockResolvedValue([
+        { id: '77777777-7777-4777-8777-777777777777', content: 'Some chunk', source_type: 'mentor_document' },
+      ]);
       messageObj = {
         id: '99999999-9999-9999-9999-999999999999',
         senderId: menteeId,
@@ -390,27 +394,28 @@ describe('RAG Pipeline E2E (Mocked)', () => {
     });
 
     test('[Boundary] no retrieved chunks → must never auto-send, must abstain', async () => {
-      // Clear all chunks
-      await KnowledgeChunk.destroy({ where: {} });
+      retrievalService.retrieveContext.mockResolvedValueOnce([]);
       await RagFacade.handleNewMessage(messageObj);
       expect(generationService.generate).not.toHaveBeenCalled();
       expect(messagingService.sendMessage).not.toHaveBeenCalled();
-      expect(socket.emitToUser).not.toHaveBeenCalled();
+      expect(socket.emitToUser).toHaveBeenCalledWith(mentorId, 'ai_draft:generating', expect.any(Object));
+      expect(socket.emitToUser).toHaveBeenCalledWith(mentorId, 'ai_draft:done', expect.any(Object));
     });
 
     test('[Boundary] [ABSTAIN_NO_CONTEXT] → must never auto-send, must abstain', async () => {
-      await KnowledgeChunk.create({ mentorId, content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
+      await KnowledgeChunk.create({ mentorId, sourceType: 'mentor_document', content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
       generationService.generate.mockResolvedValueOnce('[ABSTAIN_NO_CONTEXT]');
 
       await RagFacade.handleNewMessage(messageObj);
 
       expect(generationService.generate).toHaveBeenCalled();
       expect(messagingService.sendMessage).not.toHaveBeenCalled();
-      expect(socket.emitToUser).not.toHaveBeenCalled();
+      expect(socket.emitToUser).not.toHaveBeenCalledWith(mentorId, 'ai_draft:new', expect.any(Object));
+      expect(socket.emitToUser).toHaveBeenCalledWith(mentorId, 'ai_draft:done', expect.any(Object));
     });
 
     test('[Boundary] Gemini grounding API fail → fallback to 0 → draft/abstain', async () => {
-      await KnowledgeChunk.create({ mentorId, content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
+      await KnowledgeChunk.create({ mentorId, sourceType: 'mentor_document', content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
       generationService.generate.mockResolvedValueOnce('Valid answer');
       // Force grounding embedding to fail
       const embeddingService = require('../../src/features/rag/services/embeddingService');
@@ -420,11 +425,12 @@ describe('RAG Pipeline E2E (Mocked)', () => {
 
       // Score will be 0, which is < draftThreshold (0.60), so it should completely abstain
       expect(messagingService.sendMessage).not.toHaveBeenCalled();
-      expect(socket.emitToUser).not.toHaveBeenCalled();
+      expect(socket.emitToUser).not.toHaveBeenCalledWith(mentorId, 'ai_draft:new', expect.any(Object));
+      expect(socket.emitToUser).toHaveBeenCalledWith(mentorId, 'ai_draft:done', expect.any(Object));
     });
 
     test('[Boundary] score < review threshold → abstain', async () => {
-      await KnowledgeChunk.create({ mentorId, content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
+      await KnowledgeChunk.create({ mentorId, sourceType: 'mentor_document', content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
       generationService.generate.mockResolvedValueOnce('Ungrounded answer');
 
       // Setup vectors so score is 0.5 (below draft threshold 0.60)
@@ -436,11 +442,12 @@ describe('RAG Pipeline E2E (Mocked)', () => {
       await RagFacade.handleNewMessage(messageObj);
 
       expect(messagingService.sendMessage).not.toHaveBeenCalled();
-      expect(socket.emitToUser).not.toHaveBeenCalled(); // No draft created
+      expect(socket.emitToUser).not.toHaveBeenCalledWith(mentorId, 'ai_draft:new', expect.any(Object));
+      expect(socket.emitToUser).toHaveBeenCalledWith(mentorId, 'ai_draft:done', expect.any(Object));
     });
 
     test('[Boundary] review threshold ≤ score < auto-send threshold → create draft', async () => {
-      await KnowledgeChunk.create({ mentorId, content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
+      await KnowledgeChunk.create({ mentorId, sourceType: 'mentor_document', content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
       generationService.generate.mockResolvedValueOnce('Partially grounded answer');
 
       // Setup vectors so score is 0.7 (>= 0.60 but < 0.85)
@@ -456,7 +463,7 @@ describe('RAG Pipeline E2E (Mocked)', () => {
     });
 
     test('[Boundary] score ≥ auto-send threshold → auto-send', async () => {
-      await KnowledgeChunk.create({ mentorId, content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
+      await KnowledgeChunk.create({ mentorId, sourceType: 'mentor_document', content: 'Some chunk', embedding: `[${new Array(768).fill(0.1).join(',')}]` });
       generationService.generate.mockResolvedValueOnce('Perfectly grounded answer');
 
       // Setup vectors so score is 1.0 (>= 0.85)

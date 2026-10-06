@@ -134,17 +134,17 @@ module.exports = (sequelize, DataTypes) => {
     hooks: {
       afterCreate: async (enrollment, options) => {
         // Increment program's current_enrollments counter
-        const program = await sequelize.models.Program.findByPk(enrollment.programId);
+        const program = await sequelize.models.Program.findByPk(enrollment.programId, { transaction: options.transaction });
         if (program) {
-          await program.increment('currentEnrollments');
+          await program.increment('currentEnrollments', { transaction: options.transaction });
         }
         
         // Increment mentee's total_programs_enrolled
         const menteeProfile = await sequelize.models.MenteeProfile.findOne({
-          where: { user_id: enrollment.menteeId }
+          where: { user_id: enrollment.menteeId }, transaction: options.transaction
         });
         if (menteeProfile) {
-          await menteeProfile.increment('totalProgramsEnrolled');
+          await menteeProfile.increment('totalProgramsEnrolled', { transaction: options.transaction });
         }
       }
     }

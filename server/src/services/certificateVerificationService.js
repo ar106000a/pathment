@@ -70,10 +70,26 @@ class CertificateVerificationService {
         const aiDecision = result.decision === 'no_certificate' ? 'no_certificate' : (result.certificate_tier ? 'award' : 'undecided');
         if (aiDecision === 'undecided') continue;
         const aiTier = aiDecision === 'award' ? result.certificate_tier : null;
+        // Keep the AI recommendation as the baseline, but send the admin's
+        // selected badge as the pending grade. Previously this selection was
+        // discarded and the mentor received the AI's "No certificate" result.
+        const adminAssignment = result.admin_assignment || null;
+        const proposedDecision = adminAssignment?.decision === 'no_certificate'
+          ? 'no_certificate'
+          : adminAssignment?.finalTier ? 'award' : aiDecision;
+        const proposedTier = proposedDecision === 'award'
+          ? (adminAssignment?.finalTier || aiTier)
+          : null;
+        if (adminAssignment && proposedDecision === 'award') this._assertTierExists(template, proposedTier);
+        const proposedOverride = proposedDecision !== aiDecision || proposedTier !== aiTier;
+        const proposedReason = proposedOverride
+          ? (String(adminAssignment?.reason || '').trim() || 'Assigned by an admin before mentor review')
+          : (aiDecision === 'no_certificate' ? result.reasoning : null);
         const aiMatchScore = result.match_score != null && Number.isFinite(Number(result.match_score)) ? Number(result.match_score) : null;
         const existing = await models.CertificateVerification.findOne({ where: { templateId, menteeId }, transaction });
 
-        const clanId = clanByMentee.get(menteeId);
+        // Prefer clan stamped on the AI result (Standee runs) over cohort first-membership.
+        const clanId = result.clan_id || result.clanId || clanByMentee.get(menteeId);
         if (approved.has(clanId)) continue;
         const pendingGradeChanged = !existing || (existing.status !== 'verified' &&
           (existing.aiTier !== aiTier || existing.aiDecision !== aiDecision));
@@ -84,13 +100,14 @@ class CertificateVerificationService {
           await models.CertificateVerification.create({
             templateId,
             menteeId,
-            clanId: clanByMentee.get(menteeId) || null,
+            clanId: clanId || null,
             aiTier,
             aiDecision,
-            decision: aiDecision,
-            overrideReason: aiDecision === 'no_certificate' ? result.reasoning : null,
+            decision: proposedDecision,
+            overrideReason: proposedReason,
             aiMatchScore,
-            finalTier: aiTier,
+            finalTier: proposedTier,
+            overridden: proposedOverride,
             status: 'pending',
             stage: 'awaiting_mentor'
           }, { transaction });
@@ -104,10 +121,10 @@ class CertificateVerificationService {
           existing.aiTier = aiTier;
           existing.aiDecision = aiDecision;
           existing.aiMatchScore = aiMatchScore;
-          existing.finalTier = aiTier;
-          existing.decision = aiDecision;
-          existing.overrideReason = aiDecision === 'no_certificate' ? result.reasoning : null;
-          existing.overridden = false;
+          existing.finalTier = proposedTier;
+          existing.decision = proposedDecision;
+          existing.overrideReason = proposedReason;
+          existing.overridden = proposedOverride;
         }
         await existing.save({ transaction });
         updated += 1;
@@ -131,7 +148,7 @@ class CertificateVerificationService {
    * Sending again is a reminder, not a reset — already-signed-off rows keep
    * their decision (see `open`).
    */
-  async sendToClans(templateId, { deadline = null, clanIds = null } = {}, user) {
+  async sendToClans(templateId, { deadline = null, clanIds = null, menteeIds = null, assignments = null } = {}, user) {
     const template = await models.CertificateTemplate.findByPk(templateId);
     if (!template) throw new NotFoundError('Certificate template not found');
 
@@ -143,11 +160,42 @@ class CertificateVerificationService {
     // An admin can send to a subset of clans; everyone else is confined to
     // the clans they may sign off in anyway.
     let scopedResults = results;
+    if (Array.isArray(menteeIds)) {
+      const selected = new Set(menteeIds.filter((value) => typeof value === 'string' && value.length > 0));
+      scopedResults = scopedResults.filter((result) => selected.has(result.mentee_id || result.id));
+      if (!scopedResults.length) {
+        throw new ValidationError('Run AI evaluation for the selected mentees before sending them for review.');
+      }
+    }
+    if (Array.isArray(assignments) && assignments.length) {
+      if (!(await authzService.hasAdminAccess(user))) {
+        throw new ForbiddenError('Only an admin can assign badges while sending a review round.');
+      }
+      const criteriaIds = new Set((template.criteria || []).map((item) => item.id));
+      const byMentee = new Map();
+      for (const assignment of assignments) {
+        if (!assignment || typeof assignment.menteeId !== 'string') continue;
+        const decision = assignment.decision === 'no_certificate' ? 'no_certificate' : 'award';
+        const finalTier = decision === 'award' ? assignment.finalTier : null;
+        if (decision === 'award' && (!finalTier || !criteriaIds.has(finalTier))) {
+          throw new ValidationError('One of the selected admin badge assignments is not part of this certificate template.');
+        }
+        byMentee.set(assignment.menteeId, {
+          decision,
+          finalTier,
+          reason: String(assignment.reason || '').trim() || null
+        });
+      }
+      scopedResults = scopedResults.map((result) => {
+        const assignment = byMentee.get(result.mentee_id || result.id);
+        return assignment ? { ...result, admin_assignment: assignment } : result;
+      });
+    }
     if (Array.isArray(clanIds) && clanIds.length) {
-      const menteeIds = results.map((r) => r.mentee_id || r.id).filter(Boolean);
-      const clanOf = await this._clanOfMentees(menteeIds, template.programId);
+      const scopedMenteeIds = scopedResults.map((r) => r.mentee_id || r.id).filter(Boolean);
+      const clanOf = await this._clanOfMentees(scopedMenteeIds, template.programId);
       const wanted = new Set(clanIds);
-      scopedResults = results.filter((r) => wanted.has(clanOf.get(r.mentee_id || r.id)));
+      scopedResults = scopedResults.filter((r) => wanted.has(clanOf.get(r.mentee_id || r.id)));
     }
 
     const round = await this.open(templateId, scopedResults, { deadline, notify: true });
@@ -233,7 +281,7 @@ class CertificateVerificationService {
    * is an override: the AI's tier is preserved alongside it so the admin can
    * see what was changed, by whom and why.
    */
-  async verify(templateId, menteeId, { decision, finalTier, reason = null } = {}, user, { notify = true, transaction: existingTransaction } = {}) {
+  async verify(templateId, menteeId, { decision, finalTier, reason = null, criteriaChecks } = {}, user, { notify = true, transaction: existingTransaction } = {}) {
     const execute = async transaction => {
       // Issuance, review, and approval use the same lock so a changed decision
       // cannot race with sending a certificate under an older approval.
@@ -242,25 +290,42 @@ class CertificateVerificationService {
       const row = await models.CertificateVerification.findOne({ where: { templateId, menteeId }, transaction, lock: transaction.LOCK.UPDATE });
       if (!row) throw new NotFoundError('There is nothing to verify for this mentee');
       await this._assertCanReview(user, row);
+      const actingAsAdmin = await authzService.actsAsAdmin(user);
       const aiDecision = row.aiDecision === 'no_certificate' ? 'no_certificate' : (row.aiTier ? 'award' : 'undecided');
       const nextDecision = decision ?? (finalTier ? 'award' : aiDecision);
       if (!['award', 'no_certificate'].includes(nextDecision)) throw new ValidationError('Choose a certificate or No certificate before verifying.');
-      if (nextDecision === 'no_certificate' && finalTier) throw new ValidationError('No certificate cannot have a certificate tier.');
+      if (nextDecision === 'no_certificate' && finalTier) {
+        throw new ValidationError('No certificate cannot have a certificate tier.');
+      }
       const tier = nextDecision === 'award' ? (finalTier ?? row.aiTier) : null;
       if (nextDecision === 'award') this._assertTierExists(template, tier);
+      const tierConfig = nextDecision === 'award'
+        ? (template.criteria || []).find((item) => item.id === tier)
+        : null;
+      const requiredChecks = Array.isArray(tierConfig?.reviewChecklist)
+        ? tierConfig.reviewChecklist.map((item) => String(item).trim()).filter(Boolean)
+        : [];
+      const submittedChecks = Array.isArray(criteriaChecks)
+        ? criteriaChecks.map((item) => String(item).trim()).filter(Boolean)
+        : (row.criteriaChecks || []);
+      const checked = new Set(submittedChecks);
+      const missingChecks = requiredChecks.filter((item) => !checked.has(item));
+      if (missingChecks.length) {
+        throw new ValidationError(`Confirm every checklist item for ${tierConfig?.name || tier}: ${missingChecks.join('; ')}`);
+      }
       const overridden = nextDecision !== aiDecision || tier !== row.aiTier;
-      const previousDecision = row.decision === 'no_certificate' ? 'no_certificate' : (row.finalTier ? 'award' : 'undecided');
+      const previousDecision = row.decision === 'no_certificate' ? row.decision : (row.finalTier ? 'award' : 'undecided');
       const changed = previousDecision !== nextDecision || row.finalTier !== tier;
       const reasonRequired = overridden || nextDecision === 'no_certificate' || (row.status === 'verified' && changed);
       const explanation = String(reason || '').trim();
       if (reasonRequired && !explanation) {
         throw new ValidationError('A reason is required: tell us why you are changing this grade or selecting No certificate.');
       }
-      if (changed && row.stage === 'admin_approved' && !(await authzService.hasAdminAccess(user))) {
+      if (changed && row.stage === 'admin_approved' && !actingAsAdmin) {
         throw new ForbiddenError('This certificate has been approved. Request a change and an admin will decide.');
       }
       if (changed && await models.CertificateInstance.count({ where: { templateId, menteeId }, transaction })) {
-        if (!(await authzService.hasAdminAccess(user))) {
+        if (!actingAsAdmin) {
           throw new ForbiddenError('This certificate has already been sent. Request a revoke and change, and an admin will decide.');
         }
         throw new ValidationError('This certificate has already been sent. Revoke it before changing the decision.');
@@ -279,6 +344,7 @@ class CertificateVerificationService {
       row.finalTier = tier;
       row.overridden = overridden;
       row.overrideReason = decisionReason;
+      row.criteriaChecks = nextDecision === 'award' ? requiredChecks : [];
       row.status = 'verified';
       // An admin's sign-off is also the approval; a mentor's is only the check.
       // Writing one 'verified' for both is what left an admin unable to tell
@@ -295,7 +361,7 @@ class CertificateVerificationService {
       // worn. An admin signing off on a MENTOR screen is doing a mentor's
       // review — the button there says "sign off", and the record must agree
       // with the button.
-      if (await authzService.actsAsAdmin(user)) {
+      if (actingAsAdmin) {
         row.stage = 'admin_approved';
       } else if (row.stage === 'admin_approved' && !changed) {
         row.stage = 'admin_approved';
@@ -328,7 +394,7 @@ class CertificateVerificationService {
       const rows = [];
       for (const decision of decisions) {
         rows.push(await this.verify(templateId, decision.menteeId,
-          { decision: decision.decision, finalTier: decision.finalTier, reason: decision.reason },
+          { decision: decision.decision, finalTier: decision.finalTier, reason: decision.reason, criteriaChecks: decision.criteriaChecks },
           user, { notify: false, transaction }));
       }
       return rows;
@@ -377,8 +443,11 @@ class CertificateVerificationService {
       if (row.decision === 'no_certificate') bucket.noCertificate += 1;
     }
 
+    // One read for all open-thread counts and per-clan change-request badges.
+    const openThreads = await this.openThreads(templateId);
     const clans = [...byClan.values()].map((c) => ({
       ...c,
+      changeRequests: rows.filter((row) => row.clanId === c.clanId && openThreads.changeRequested.has(row.menteeId)).length,
       complete: c.pending === 0,
       // Released by the admin — this is what lets the clan's mentors send.
       approved: Boolean(c.clanId && approvedClans.has(c.clanId)),
@@ -386,9 +455,6 @@ class CertificateVerificationService {
       readyToApprove: c.pending === 0 && !(c.clanId && approvedClans.has(c.clanId))
     }));
     const deadline = template.verificationDeadline || null;
-    // One read for all three open-thread counts below.
-    const openThreads = await this.openThreads(templateId);
-
     return {
       deadline,
       overdue: Boolean(deadline && new Date(deadline) < new Date() && clans.some((c) => !c.complete)),
@@ -438,10 +504,9 @@ class CertificateVerificationService {
 
     const { approval, pending } = await sequelize.transaction(async transaction => {
       await models.CertificateTemplate.findByPk(templateId, { transaction, lock: transaction.LOCK.UPDATE });
-      const pendingRows = await models.CertificateVerification.findAll({
-        where: { templateId, clanId, status: 'pending' }, transaction
-      });
-      const pending = (await this._activeReviewRows(pendingRows, template.programId, { transaction })).length;
+      const clanRows = await models.CertificateVerification.findAll({ where: { templateId, clanId }, transaction });
+      const activeRows = await this._activeReviewRows(clanRows, template.programId, { transaction });
+      const pending = activeRows.filter((row) => row.status === 'pending').length;
 
       const [approval] = await models.CertificateClanApproval.findOrCreate({
         where: { templateId, clanId },
@@ -458,10 +523,13 @@ class CertificateVerificationService {
       // Releasing the clan is the admin's approval of what is in it. Without
       // this the roster still said "mentor verified" on rows the admin had
       // already cleared to send, which is the question they came to answer.
-      await models.CertificateVerification.update(
-        { stage: 'admin_approved' },
-        { where: { templateId, clanId, status: 'verified' }, transaction }
-      );
+      const activeIds = activeRows.map((row) => row.id);
+      if (activeIds.length) {
+        await models.CertificateVerification.update(
+          { stage: 'admin_approved', status: 'verified', verifiedBy: user.id, verifiedAt: new Date() },
+          { where: { id: { [Op.in]: activeIds } }, transaction }
+        );
+      }
       return { approval, pending };
     });
 
@@ -739,6 +807,79 @@ class CertificateVerificationService {
     return out;
   }
 
+  /**
+   * Make an explicit admin issuance the recorded final decision as well.
+   *
+   * Without this, the credential existed but an older pending row still told
+   * the mentor and admin banners that the mentee was waiting for review. This
+   * runs inside the issuance transaction: either the approval and credential
+   * both land, or neither does.
+   */
+  async recordAdminIssuanceDecisions(template, assignments, user, { transaction } = {}) {
+    if (!Array.isArray(assignments) || !assignments.length) return 0;
+    if (!(await authzService.hasAdminAccess(user))) {
+      throw new ForbiddenError('Only an admin can record a direct issuance decision');
+    }
+
+    const menteeIds = assignments.map((item) => item.menteeId).filter(Boolean);
+    const clanByMentee = await this._clanOfMentees(menteeIds, template.programId);
+    const aiByMentee = new Map((template.aiEvaluation?.results || []).map((result) => [result.mentee_id || result.id, result]));
+    let recorded = 0;
+
+    for (const assignment of assignments) {
+      const { menteeId, tier } = assignment;
+      if (!menteeId || !tier) continue;
+      const ai = aiByMentee.get(menteeId) || null;
+      const aiDecision = ai?.decision === 'no_certificate' ? 'no_certificate' : (ai?.certificate_tier ? 'award' : 'undecided');
+      const aiTier = aiDecision === 'award' ? ai.certificate_tier : null;
+      const reason = 'Issued directly by admin without mentor verification';
+      let row = await models.CertificateVerification.findOne({
+        where: { templateId: template.id, menteeId }, transaction, lock: transaction?.LOCK.UPDATE
+      });
+      const previousDecision = row?.decision === 'no_certificate' ? 'no_certificate' : (row?.finalTier ? 'award' : 'undecided');
+      const previousTier = row?.finalTier || null;
+      const baselineAiDecision = row?.aiDecision ?? aiDecision;
+      const baselineAiTier = row?.aiTier ?? aiTier;
+      const history = [...(row?.decisionHistory || [])];
+      if (previousDecision !== 'award' || previousTier !== tier || row?.stage !== 'admin_approved') {
+        history.push({
+          at: new Date().toISOString(),
+          by: user.id,
+          byName: [user.firstName, user.lastName].filter(Boolean).join(' '),
+          from: { decision: previousDecision, tier: previousTier },
+          to: { decision: 'award', tier },
+          reason
+        });
+      }
+
+      const values = {
+        templateId: template.id,
+        menteeId,
+        clanId: row?.clanId || clanByMentee.get(menteeId) || null,
+        aiTier: baselineAiTier,
+        aiDecision: baselineAiDecision,
+        aiMatchScore: row?.aiMatchScore ?? (Number.isFinite(Number(ai?.match_score)) ? Number(ai.match_score) : null),
+        decision: 'award',
+        finalTier: tier,
+        overridden: baselineAiDecision !== 'award' || baselineAiTier !== tier,
+        overrideReason: reason,
+        decisionHistory: history,
+        status: 'verified',
+        stage: 'admin_approved',
+        verifiedBy: user.id,
+        verifiedAt: new Date()
+      };
+      if (row) {
+        Object.assign(row, values);
+        await row.save({ transaction });
+      } else {
+        row = await models.CertificateVerification.create(values, { transaction });
+      }
+      recorded += 1;
+    }
+    return recorded;
+  }
+
   // ── internals ─────────────────────────────────────────────────────────────
 
   _templateSummary(template) {
@@ -766,6 +907,7 @@ class CertificateVerificationService {
       decisionHistory: json.decisionHistory || [],
       overridden: Boolean(json.overridden),
       overrideReason: json.overrideReason || null,
+      criteriaChecks: Array.isArray(json.criteriaChecks) ? json.criteriaChecks : [],
       status: json.status,
       stage: json.stage || (json.status === 'verified' ? 'mentor_verified' : 'awaiting_mentor'),
       verifiedAt: json.verifiedAt || null,
@@ -789,11 +931,20 @@ class CertificateVerificationService {
     // the mentee at all. It is on by default for co-mentors.
     let clanIds = await authzService.clansWhereCan(user, PERMISSIONS.CERTIFICATE_VERIFY);
     if (!clanIds.length) return [];
-    if (programId) {
-      const inProgram = await models.Clan.findAll({
-        where: { id: { [Op.in]: clanIds }, programId }, attributes: ['id'], raw: true
+
+    // Standee + cohort: mentors may sign off in either kind they can verify.
+    // onlyClanId = Standee keeps the round isolated to that clan.
+    {
+      const inScope = await models.Clan.findAll({
+        where: {
+          id: { [Op.in]: clanIds },
+          kind: { [Op.in]: ['cohort', 'standing'] },
+          ...(programId ? { programId } : {}),
+        },
+        attributes: ['id'],
+        raw: true,
       });
-      clanIds = inProgram.map((c) => c.id);
+      clanIds = inScope.map((c) => c.id);
     }
     if (onlyClanId) clanIds = clanIds.filter((id) => id === onlyClanId);
     return clanIds;
@@ -801,6 +952,8 @@ class CertificateVerificationService {
 
   async _assertCanReview(user, row) {
     if (await authzService.hasAdminAccess(user)) return;
+    const clan = row.clanId && await models.Clan.findByPk(row.clanId);
+    if (clan?.frozenAt) throw new ForbiddenError('Certificate decisions in a completed program are read-only for mentors');
     const allowed = await this._reviewableClanIds(user, null);
     if (!row.clanId || !allowed.includes(row.clanId)) {
       throw new ForbiddenError('You can only verify certificates for mentees in your clan');
@@ -818,12 +971,23 @@ class CertificateVerificationService {
         status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES }
       },
       attributes: ['userId', 'clanId'],
-      include: programId
-        ? [{ model: models.Clan, as: 'clan', where: { programId }, attributes: [] }]
-        : [],
-      raw: true
+      include: [{
+        model: models.Clan,
+        as: 'clan',
+        where: { kind: 'cohort', ...(programId ? { programId } : {}) },
+        attributes: ['frozenAt'],
+      }],
     });
-    for (const row of rows) if (!out.has(row.userId)) out.set(row.userId, row.clanId);
+    // Prefer frozen (completed) cohort when a mentee also sits in a live cohort.
+    // Standee attribution comes from result.clan_id in open() — not from here.
+    const frozenByUser = new Map();
+    for (const row of rows) {
+      const frozen = !!row.clan?.frozenAt;
+      if (!out.has(row.userId) || (frozen && !frozenByUser.get(row.userId))) {
+        out.set(row.userId, row.clanId);
+        frozenByUser.set(row.userId, frozen);
+      }
+    }
     return out;
   }
 
@@ -835,12 +999,21 @@ class CertificateVerificationService {
   async _activeReviewRows(rows, programId, { transaction } = {}) {
     if (!rows.length) return [];
     const menteeIds = [...new Set(rows.map((row) => row.menteeId))];
+    // Include standing memberships so Standee review rows are not dropped.
     const memberships = await models.ClanMembership.findAll({
       where: { userId: { [Op.in]: menteeIds }, role: 'mentee', status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES } },
       attributes: ['userId', 'clanId', 'status'],
       include: [
         { model: models.User, as: 'user', attributes: [], required: true, where: { status: { [Op.ne]: 'suspended' } } },
-        ...(programId ? [{ model: models.Clan, as: 'clan', attributes: [], required: true, where: { programId } }] : [])
+        {
+          model: models.Clan,
+          as: 'clan',
+          attributes: [],
+          required: true,
+          where: programId
+            ? { programId, kind: { [Op.in]: ['cohort', 'standing'] } }
+            : { kind: { [Op.in]: ['cohort', 'standing'] } },
+        }
       ],
       raw: true, transaction
     });

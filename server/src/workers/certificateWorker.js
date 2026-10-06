@@ -73,7 +73,8 @@ async function checkRunCompletion(runId, triggeredBy, templateId) {
       raw: true
     });
 
-    const results = finishedJobs.filter(j => j.result).map(j => ({ ...j.result, mentee_id: j.menteeId, evaluatedAt: j.createdAt }));
+    const skipped = finishedJobs.filter(j => j.result?._skipped).length;
+    const results = finishedJobs.filter(j => j.result && !j.result._skipped).map(j => ({ ...j.result, mentee_id: j.menteeId, evaluatedAt: j.createdAt }));
     const enrichedResults = await enrichEvaluationResults(results);
 
     if (templateId) {
@@ -93,7 +94,8 @@ async function checkRunCompletion(runId, triggeredBy, templateId) {
       ranAt: new Date().toISOString(),
       total,
       completed,
-      failed
+      failed,
+      skipped
     });
 
     logger.info(`[Certificate Worker - AI Eval] Run ${runId} complete: ${completed} done, ${failed} failed out of ${total}`);
@@ -118,16 +120,46 @@ async function processBatchJobs(batchJobs) {
     await organizationService.assertMembership(triggeredBy, requireWorkspaceId());
     for (const job of batchJobs) await organizationService.assertMembership(job.menteeId, requireWorkspaceId());
 
-    const batchItems = batchJobs.map(j => ({
+    // A mentor/admin may finalize a decision while this job is waiting. Check
+    // again immediately before the model call so the worker can never overwrite
+    // a human-reviewed, approved, or issued certificate due to a race.
+    const menteeIds = batchJobs.map((job) => job.menteeId);
+    const [issuedRows, verificationRows, approvedClanRows] = await Promise.all([
+      models.CertificateInstance.findAll({ where: { templateId, menteeId: { [Op.in]: menteeIds } }, attributes: ['menteeId'], raw: true }),
+      models.CertificateVerification.findAll({
+        where: { templateId, menteeId: { [Op.in]: menteeIds } },
+        attributes: ['menteeId', 'clanId', 'status', 'stage'], raw: true
+      }),
+      models.CertificateClanApproval.findAll({ where: { templateId }, attributes: ['clanId'], raw: true })
+    ]);
+    const approvedClanIds = new Set(approvedClanRows.map((row) => row.clanId));
+    const finalizedIds = new Set([
+      ...issuedRows.map((row) => row.menteeId),
+      ...verificationRows
+        .filter((row) => row.status === 'verified' || row.stage === 'admin_approved' || approvedClanIds.has(row.clanId))
+        .map((row) => row.menteeId)
+    ]);
+    for (const job of batchJobs) {
+      if (!finalizedIds.has(job.menteeId)) continue;
+      job.status = 'completed';
+      job.result = { _skipped: true, mentee_id: job.menteeId, reason: 'Human-reviewed, approved, or issued before AI processing.' };
+      job.error = null;
+    }
+
+    const evaluationJobs = batchJobs.filter((job) => !finalizedIds.has(job.menteeId));
+    const batchItems = evaluationJobs.map(j => ({
       menteeId:      j.menteeId,
       menteePayload: j.menteePayload,
       preCheck:      j.preCheck
     }));
 
-    const batchResults = await certificateService.evaluateBatchMentees(template, batchItems, triggeredBy);
+    const batchResults = evaluationJobs.length
+      ? await certificateService.evaluateBatchMentees(template, batchItems, triggeredBy)
+      : [];
     const resultMap = new Map(batchResults.map(r => [r.menteeId, r.result]));
 
     for (const job of batchJobs) {
+      if (finalizedIds.has(job.menteeId)) continue;
       const result = resultMap.get(job.menteeId) || certificateService.buildFallbackResult(job.menteePayload, job.preCheck);
       job.status = result._failed ? 'failed' : 'completed';
       job.result = result;
@@ -136,7 +168,7 @@ async function processBatchJobs(batchJobs) {
 
     // Persist each completed batch before reporting progress, including runs
     // whose remaining batches fail or whose worker is restarted.
-    const persistedResults = await enrichEvaluationResults(batchJobs.map(job => ({
+    const persistedResults = await enrichEvaluationResults(batchJobs.filter((job) => !job.result?._skipped).map(job => ({
       ...job.result, mentee_id: job.menteeId, evaluatedAt: job.createdAt
     })));
     await sequelize.transaction(async transaction => {
@@ -150,7 +182,6 @@ async function processBatchJobs(batchJobs) {
       { replacements: { runId, templateId, triggeredBy, organizationId: requireWorkspaceId() }, type: sequelize.QueryTypes.SELECT }
     );
 
-    const menteeIds = batchJobs.map(j => j.menteeId);
     const mentees = await models.User.findAll({
       where: { id: { [Op.in]: menteeIds } },
       attributes: ['id', 'firstName', 'lastName', 'email'],

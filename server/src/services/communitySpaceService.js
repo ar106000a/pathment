@@ -31,11 +31,11 @@ class CommunitySpaceService {
    */
   async _myClanMemberships(userId) {
     const rows = await models.ClanMembership.findAll({
-      where: { userId, status: 'active' },
+      where: { userId, status: { [Op.in]: ['active', 'paused'] } },
       include: [{
         model: models.Clan,
         as: 'clan',
-        attributes: ['id', 'name', 'programId'],
+        attributes: ['id', 'name', 'programId', 'kind', 'frozenAt'],
         include: [{ model: models.Program, as: 'program', attributes: ['id', 'name'] }]
       }]
     });
@@ -50,7 +50,7 @@ class CommunitySpaceService {
       where: { menteeId: userId, status: { [Op.notIn]: ['rejected', 'dropped'] } },
       include: [
         { model: models.Program, as: 'program', attributes: ['id', 'name'] },
-        { model: models.Cohort, as: 'cohort', attributes: ['id', 'name', 'programId'] }
+        { model: models.Cohort, as: 'cohort', attributes: ['id', 'name', 'programId', 'status'] }
       ]
     });
   }
@@ -81,9 +81,13 @@ class CommunitySpaceService {
         name: m.clan.name,
         subtitle: m.clan.program?.name || 'Clan',
         role: m.role,
-        isModerator: moderator
+        isModerator: moderator,
+        // Completed cohort spaces remain browseable, but all community writes
+        // must agree with the rest of the frozen clan workspace. Standing clans
+        // linked to that program remain writable.
+        readOnly: m.clan.kind !== 'standing' && Boolean(m.clan.frozenAt),
       });
-      if (m.clan.programId) {
+      if (m.clan.programId && m.clan.kind !== 'standing') {
         programNames.set(m.clan.programId, m.clan.program?.name || 'Program');
         if (MENTOR_CLAN_ROLES.includes(m.role)) mentorProgramIds.add(m.clan.programId);
       }
@@ -99,7 +103,8 @@ class CommunitySpaceService {
           name: e.cohort.name,
           subtitle: e.program?.name ? `${e.program.name} · batch` : 'Cohort',
           role: 'member',
-          isModerator: isAdmin(user)
+          isModerator: isAdmin(user),
+          readOnly: e.cohort.status === 'completed',
         });
       }
       if (e.program) {
@@ -132,7 +137,7 @@ class CommunitySpaceService {
       }
       const cohorts = await models.Cohort.findAll({
         where: { programId: { [Op.in]: programIds } },
-        attributes: ['id', 'name', 'programId']
+        attributes: ['id', 'name', 'programId', 'status']
       });
       for (const c of cohorts) {
         add({
@@ -142,7 +147,8 @@ class CommunitySpaceService {
           name: c.name,
           subtitle: `${programNames.get(c.programId) || 'Program'} · batch`,
           role: 'mentor',
-          isModerator: true
+          isModerator: true,
+          readOnly: c.status === 'completed',
         });
       }
     }
@@ -171,7 +177,18 @@ class CommunitySpaceService {
     if (match) return match;
     // Admins can open any space for moderation even without membership.
     if (isAdmin(user)) {
-      return { type: scopeType, id: scopeId, name: 'Space', isModerator: true, role: 'admin' };
+      const space = scopeType === 'clan' ? await models.Clan.findByPk(scopeId) : scopeType === 'cohort' ? await models.Cohort.findByPk(scopeId) : await models.Program.findByPk(scopeId);
+      if (!space) return null;
+      return {
+        type: scopeType,
+        id: scopeId,
+        name: space.name,
+        isModerator: true,
+        role: 'admin',
+        readOnly:
+          (scopeType === 'clan' && space.kind !== 'standing' && Boolean(space.frozenAt)) ||
+          (scopeType === 'cohort' && space.status === 'completed'),
+      };
     }
     return null;
   }
@@ -191,7 +208,7 @@ class CommunitySpaceService {
 
     if (scopeType === 'program') {
       const ids = new Set();
-      const clans = await models.Clan.findAll({ where: { programId: scopeId }, attributes: ['id'] });
+      const clans = await models.Clan.findAll({ where: { programId: scopeId, kind: 'cohort' }, attributes: ['id'] });
       const clanIds = clans.map((c) => c.id);
       if (clanIds.length) {
         const cm = await models.ClanMembership.findAll({
@@ -215,7 +232,7 @@ class CommunitySpaceService {
       // Mentors of the cohort's program.
       const cohort = await models.Cohort.findByPk(scopeId, { attributes: ['programId'] });
       if (cohort) {
-        const clans = await models.Clan.findAll({ where: { programId: cohort.programId }, attributes: ['id'] });
+        const clans = await models.Clan.findAll({ where: { programId: cohort.programId, kind: 'cohort' }, attributes: ['id'] });
         const clanIds = clans.map((c) => c.id);
         if (clanIds.length) {
           const mentors = await models.ClanMembership.findAll({

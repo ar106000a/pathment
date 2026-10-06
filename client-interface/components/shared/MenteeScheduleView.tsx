@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { CalendarClock, Route, Repeat, Check, Loader2, Clock } from 'lucide-react';
 import { scheduleApi, type MenteeScheduleResult, type ScheduleSlot } from '@/lib/services/schedule-api';
+import { useClan } from '@/lib/context/ClanContext';
 
 /**
  * Read-only "this mentee's week" — the same per-mentee schedule the mentor fills,
@@ -42,18 +43,20 @@ function RoadmapChain({ slot }: { slot: ScheduleSlot }) {
 }
 
 export function MenteeScheduleView({ menteeId, className = '' }: { menteeId: string; className?: string }) {
+  const { activeClanId } = useClan();
   const [data, setData] = useState<MenteeScheduleResult | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
+    // Clan comes from X-Active-Clan; refetch when mentor switches Standee ↔ cohort.
     scheduleApi.getMenteeSchedule(menteeId)
       .then((r) => { if (active) setData((r?.data?.schedule as MenteeScheduleResult) ?? null); })
       .catch(() => { if (active) setData(null); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [menteeId]);
+  }, [menteeId, activeClanId]);
 
   const slots = data?.schedule ?? [];
 

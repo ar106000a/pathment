@@ -8,8 +8,14 @@ export interface OrganizationSummary {
 /** Aggregated counts stay readable whether the organization has 30 or 30,000 people. */
 export function OrganizationCharts({
   summary,
+  scopeLabel = "Organization",
+  historical = false,
+  programId,
 }: {
   summary?: OrganizationSummary;
+  scopeLabel?: string;
+  historical?: boolean;
+  programId?: string;
 }) {
   if (!summary) return null;
   const total = Object.values(summary.risk).reduce(
@@ -42,7 +48,7 @@ export function OrganizationCharts({
       <section className="rounded-3xl border border-border bg-card p-6">
         <h2 className="text-lg">Where support is needed</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          {total.toLocaleString()} distinct active mentees · current snapshot
+          {total.toLocaleString()} mentees in {scopeLabel} · {historical ? "at program close" : "current snapshot"}
         </p>
         <div
           className="my-6 flex h-7 overflow-hidden rounded-full bg-muted"
@@ -64,12 +70,12 @@ export function OrganizationCharts({
             >
               <span className="flex items-center gap-2">
                 <span className={`h-2.5 w-2.5 rounded-full ${group.color}`} />
-                {group.key === "low" ? (
+                {group.key === "low" || historical ? (
                   group.label
                 ) : (
                   <Link
                     className="hover:underline"
-                    href={`/admin/follow-ups?risk=${group.key}`}
+                    href={`/admin/follow-ups?risk=${group.key}${programId ? `&programId=${encodeURIComponent(programId)}` : ""}`}
                   >
                     {group.label} →
                   </Link>

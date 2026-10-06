@@ -1,12 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { TrendingUp, Plus, Loader2, ArrowRight, Crown, Check, Sparkles, Activity, Clock, AlertTriangle } from 'lucide-react';
 import { useMentorPromotions, useMentorCohort, type PromotionCandidate, type PromotionStage } from '@/lib/hooks/mentor';
 import { Drawer } from '@/components/shared/Drawer';
 import { useAuth } from '@/lib/context/AuthContext';
 import { mentorApi } from '@/lib/services/mentor-api';
+import { useClan } from '@/lib/context/ClanContext';
+import { extractApiErrorMessage } from '@/lib/utils/api-error';
 
 const STAGES: { key: PromotionStage; label: string }[] = [
   { key: 'nominated', label: 'Nominated' },
@@ -177,6 +179,7 @@ function InterviewModal({ candidate, onClose, onSaved }: { candidate: PromotionC
 }
 
 export default function MentorPromotions() {
+  const { activeClanId } = useClan();
   const { candidates, loading, error, refetch } = useMentorPromotions();
   const { cohort } = useMentorCohort();
   const { availableRoles } = useAuth();
@@ -186,6 +189,13 @@ export default function MentorPromotions() {
   const [pickMentee, setPickMentee] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [interviewing, setInterviewing] = useState<PromotionCandidate | null>(null);
+
+  useEffect(() => {
+    setNominating(false);
+    setPickMentee('');
+    setInterviewing(null);
+    setBusy(null);
+  }, [activeClanId]);
 
   const nomineeIds = useMemo(() => new Set(candidates.map((c) => c.menteeId)), [candidates]);
   const eligible = cohort.filter((m) => !nomineeIds.has(m.id));
@@ -198,7 +208,7 @@ export default function MentorPromotions() {
       toast.success('Nominated');
       setNominating(false); setPickMentee('');
       refetch();
-    } catch (e: any) { toast.error(e?.response?.data?.message || 'Could not nominate'); }
+    } catch (error) { toast.error(extractApiErrorMessage(error, 'Could not nominate')); }
     finally { setBusy(null); }
   };
 
@@ -208,8 +218,8 @@ export default function MentorPromotions() {
     if (c.stage === 'nominated') { setInterviewing(c); return; }
     if (next === 'promoted') {
       if (!isAdmin) { toast.error('Only an admin can finalise a promotion'); return; }
-      try { setBusy(c.id); await mentorApi.promote(c.id); toast.success(`${c.name.split(' ')[0]} promoted to co-mentor`); refetch(); }
-      catch (e: any) { toast.error(e?.response?.data?.message || 'Could not promote'); }
+      try { setBusy(c.id); await mentorApi.promote(c.id, c.targetClanId || undefined); toast.success(`${c.name.split(' ')[0]} promoted to co-mentor`); refetch(); }
+      catch (error) { toast.error(extractApiErrorMessage(error, 'Could not promote')); }
       finally { setBusy(null); }
       return;
     }

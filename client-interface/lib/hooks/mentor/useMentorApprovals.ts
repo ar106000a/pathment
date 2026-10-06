@@ -108,7 +108,8 @@ export function useMentorApprovals(): UseMentorApprovalsReturn {
   const { activeClanId } = useClan();
 
   const { data, loading, error, refetch } = useApiQuery<ApprovalsData>({
-    queryKey: qk.mentor.approvals,
+    // Refetch when clan changes so badge/list stay aligned with X-Active-Clan stamps.
+    queryKey: [...qk.mentor.approvals, activeClanId],
     queryFn: async () => {
       // The changes-requested and reviewed lists are best-effort: a failure
       // there must not blank the whole page.

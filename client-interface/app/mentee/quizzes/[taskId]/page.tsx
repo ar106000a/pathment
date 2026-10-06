@@ -13,6 +13,7 @@ import {
 } from '@/lib/services/quiz-api';
 import { extractApiErrorMessage } from '@/lib/utils/api-error';
 import { useConfirm } from '@/lib/context/ConfirmContext';
+import { useClan, isHistoricalCohortClan } from '@/lib/context/ClanContext';
 
 type Phase = 'loading' | 'intro' | 'active' | 'submitting' | 'done' | 'error';
 interface Answer { selectedOptionIds: string[]; answerText: string }
@@ -30,6 +31,11 @@ export default function QuizRunnerPage({ params }: { params: Promise<{ taskId: s
   const { taskId } = use(params);
   const router = useRouter();
   const confirm = useConfirm();
+  const { menteeClans, menteeActiveClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    menteeClans.find((c) => c.id === menteeActiveClanId),
+  );
+  const HISTORICAL_TITLE = 'Completed programs are read-only';
 
   const [phase, setPhase] = useState<Phase>('loading');
   const [errorMsg, setErrorMsg] = useState('');
@@ -270,7 +276,7 @@ export default function QuizRunnerPage({ params }: { params: Promise<{ taskId: s
 
               <div className="mt-7 flex items-center justify-center gap-2">
                 {canRetake && (
-                  <button onClick={startQuiz} className="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-medium inline-flex items-center gap-2">
+                  <button onClick={startQuiz} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50">
                     <RotateCcw className="w-4 h-4" /> Retake quiz
                   </button>
                 )}
@@ -319,7 +325,7 @@ export default function QuizRunnerPage({ params }: { params: Promise<{ taskId: s
               </div>
             ) : null}
 
-            <button onClick={startQuiz} className="mt-7 inline-flex items-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium">
+            <button onClick={startQuiz} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="mt-7 inline-flex items-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium disabled:opacity-50">
               {resuming ? <><RotateCcw className="w-4 h-4" /> Resume quiz</> : <><Play className="w-4 h-4" /> Start quiz</>}
             </button>
           </div>

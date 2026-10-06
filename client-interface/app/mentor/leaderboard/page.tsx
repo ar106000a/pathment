@@ -63,6 +63,7 @@ function Avatar({
 
 export default function MentorLeaderboard() {
   const { clans, activeClanId } = useClan();
+  // Frozen cohorts keep this same standings UI (banner via ClanWorkspaceNotice).
 
   // Scores only compare people who train together, so SOME clan must be chosen:
   // merging two clans into one ranking would compare mentees who were never in
@@ -71,6 +72,18 @@ export default function MentorLeaderboard() {
   const clanId = activeClanId !== ALL_CLANS ? activeClanId : (clans[0]?.id ?? null);
   const clanName = clans.find((c) => c.id === clanId)?.name ?? null;
 
+  return <LiveLeaderboard clanId={clanId} clanName={clanName} clans={clans} />;
+}
+
+function LiveLeaderboard({
+  clanId,
+  clanName,
+  clans,
+}: {
+  clanId: string | null;
+  clanName: string | null;
+  clans: { id: string; name: string }[];
+}) {
   const { performance, loading, error, refetch } = useClanPerformance(clanId);
 
   const ranked = performance?.ranked ?? [];

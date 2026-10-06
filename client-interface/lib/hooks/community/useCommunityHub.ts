@@ -5,6 +5,7 @@ import { qk, useApiQuery, STALE } from '@/lib/query';
 import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
 
 export interface CommunitySpace {
+  readOnly?: boolean;
   key: string;
   type: ScopeType;
   id: string | null;

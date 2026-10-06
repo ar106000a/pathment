@@ -46,6 +46,7 @@ describe('top performer nominations', () => {
     const task = await createRoadmapTask({ roadmapId: roadmap.id, title: `Task ${order}`, taskOrder: order });
     return models.AssignedTask.create({
       roadmapTaskId: task.id, menteeId, mentorId: lead.id,
+      clanId: clan.id,
       enrollmentId: enrollments[menteeId].id,
       status, isCustomTask: false, isLate: false,
       dueDate: new Date(Date.now() + 7 * 86400000),

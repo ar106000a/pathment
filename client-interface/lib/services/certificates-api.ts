@@ -71,7 +71,9 @@ export interface CertificateTemplate {
     minCompletionRate?: number | null;
     minOnTimeRate?: number | null;
     minAvgRating?: number | null;
+    minAttendanceRate?: number | null;
     customRule?: string | null;
+    reviewChecklist?: string[];
   }>;
   aiEvaluation?: { results: AIEvaluationResult[]; ranAt: string } | null;
   aiEvaluationRanAt?: string | null;
@@ -163,10 +165,29 @@ export interface AIEvaluationResult {
   };
   blockers_analysis?: AIBlockersAnalysis;
   custom_rules_check?: Array<{
+    tierId?: string;
     rule: string;
     passed: boolean;
     evidence: string;
   }>;
+  criteria_checks?: Array<{
+    tierId?: string;
+    item: string;
+    passed: boolean;
+    evidence: string;
+  }>;
+  tier_checks?: Array<{
+    tier_id: string;
+    hard_constraints_passed: boolean;
+    keywords_passed: boolean;
+    missing_keywords: string[];
+    custom_rule: string | null;
+    custom_rule_passed: boolean;
+    custom_rule_evidence: string | null;
+    checklist_passed?: boolean;
+    checklist?: Array<{ item: string; passed: boolean; evidence: string | null }>;
+  }>;
+  evaluation_summary?: string;
   reasoning: string;
 }
 
@@ -199,6 +220,7 @@ export interface CertificateVerification {
   decisionHistory: CertificateDecisionHistoryEntry[];
   overridden: boolean;
   overrideReason: string | null;
+  criteriaChecks: string[];
   status: 'pending' | 'verified';
   /** An admin has queried this grade and the mentor has not answered yet. */
   hasOpenQuestion?: boolean;
@@ -276,6 +298,7 @@ export interface VerificationClanStatus {
   verified: number;
   pending: number;
   overridden: number;
+  changeRequests?: number;
   noCertificate?: number;
   /** Verified by a mentor, still waiting on the admin. */
   mentorVerified?: number;
@@ -421,6 +444,7 @@ export interface TierThresholds {
   minOnTimeRate: number | null;
   minAvgRating: number | null;
   minAttendanceRate: number | null;
+  reviewChecklist: string[];
 }
 
 export interface TierConstraintChecks {
@@ -458,6 +482,7 @@ export interface MenteeEvidence {
     decisionHistory: CertificateDecisionHistoryEntry[];
     overridden: boolean;
     overrideReason: string | null;
+    criteriaChecks: string[];
     verifiedAt: string | null;
     verifiedBy: string | null;
   } | null;
@@ -495,13 +520,13 @@ export const certificatesApi = {
    * Confirm or change one mentee's grade. Omit `finalTier` to accept the AI's.
    * A different tier is an override and the server requires a reason.
    */
-  verifyOne: (templateId: string, menteeId: string, body: { decision?: CertificateDecision; finalTier?: string | null; reason?: string }) =>
+  verifyOne: (templateId: string, menteeId: string, body: { decision?: CertificateDecision; finalTier?: string | null; reason?: string; criteriaChecks?: string[] }) =>
     apiClient.post<{ success: boolean; data: { verification: CertificateVerification } }>(
       `/certificates/templates/${templateId}/verifications/${menteeId}`, body
     ),
 
   /** Sign off several at once — "these all look right". */
-  verifyMany: (templateId: string, decisions: Array<{ menteeId: string; decision?: CertificateDecision; finalTier?: string | null; reason?: string }>) =>
+  verifyMany: (templateId: string, decisions: Array<{ menteeId: string; decision?: CertificateDecision; finalTier?: string | null; reason?: string; criteriaChecks?: string[] }>) =>
     apiClient.post<{ success: boolean; message: string; data: { verified: number } }>(
       `/certificates/templates/${templateId}/verifications/bulk`, { decisions }, { timeout: 120000 }
     ),
@@ -532,7 +557,12 @@ export const certificatesApi = {
    * deadline. Explicit rather than automatic: an admin usually re-runs the AI
    * while tuning the criteria, and notifying on every run is noise.
    */
-  sendToClans: (templateId: string, body: { deadline?: string; clanIds?: string[] } = {}) =>
+  sendToClans: (templateId: string, body: {
+    deadline?: string;
+    clanIds?: string[];
+    menteeIds?: string[];
+    assignments?: Array<{ menteeId: string; decision: CertificateDecision; finalTier: string | null; reason?: string }>;
+  } = {}) =>
     apiClient.post<{
       success: boolean;
       message: string;
@@ -616,7 +646,9 @@ export const certificatesApi = {
     menteeIds?: string[]; 
     mentorId?: string; 
     tier?: string;
-    recipients?: Array<{ menteeId: string; tier: string }>
+    recipients?: Array<{ menteeId: string; tier: string }>;
+    /** Admin-only, explicit acknowledgement that the selected tier bypasses mentor review. */
+    adminOverrideReview?: boolean;
   }) => 
     apiClient.post<{
       success: boolean;
@@ -628,6 +660,7 @@ export const certificatesApi = {
         /** Recipients skipped because they already hold a certificate or have a No certificate decision. */
         skipped: number;
         skippedNoCertificate?: number;
+        reviewBypassed?: number;
         /** True when every recipient was already issued, so nothing was sent. */
         alreadyIssued?: boolean;
       };
@@ -719,9 +752,13 @@ export const certificatesApi = {
   resendAllTemplateCertificates: (id: string, failedOnly: boolean) =>
     apiClient.post<{ success: boolean; message: string; updated: number }>(`/certificates/templates/${id}/resend`, { failedOnly }),
 
-  runAIEvaluation: (id: string, mentorId?: string) => {
+  runAIEvaluation: (id: string, mentorId?: string, menteeIds?: string[]) => {
     const qs = mentorId ? `?mentorId=${encodeURIComponent(mentorId)}` : '';
-    return apiClient.post<{ success: boolean; runId: string; total: number; message: string }>(`/certificates/templates/${id}/ai-evaluate${qs}`, {}, { timeout: 120000 });
+    return apiClient.post<{ success: boolean; runId: string; total: number; message: string }>(
+      `/certificates/templates/${id}/ai-evaluate${qs}`,
+      { menteeIds },
+      { timeout: 120000 }
+    );
   },
 
   getAIEvaluationStatus: (id: string, runId?: string) => {

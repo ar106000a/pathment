@@ -18,6 +18,8 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       field: 'program_id'
     },
+    kind: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'cohort', validate: { isIn: [['cohort', 'standing']] } },
+    frozenAt: { type: DataTypes.DATE, field: 'frozen_at' },
     name: {
       type: DataTypes.STRING(150),
       allowNull: false

@@ -36,8 +36,11 @@ const NO_ENROLLMENTS: any[] = [];
 
 export function useMenteeTasks(): UseMenteeTasksReturn {
   const { user } = useAuth();
-  const { menteeActiveClanId } = useClan();
+  const { menteeActiveClanId, menteeClans } = useClan();
   const menteeId = user?.id ?? '';
+  // Standing work is clan-scoped with null enrollmentId — never filter by a
+  // completed-cohort enrollment or those tasks disappear from the list.
+  const standingClan = menteeClans.find((c) => c.id === menteeActiveClanId)?.kind === 'standing';
 
   const [enrollmentOverride, setSelectedEnrollmentId] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -63,7 +66,7 @@ export function useMenteeTasks(): UseMenteeTasksReturn {
     const active = enrollments.find((e: any) => ['active', 'matched'].includes(e.status)) || enrollments[0];
     return active?.id ?? null;
   }, [enrollments]);
-  const selectedEnrollmentId = enrollmentOverride ?? defaultEnrollmentId;
+  const selectedEnrollmentId = standingClan ? null : (enrollmentOverride ?? defaultEnrollmentId);
 
   const statsQuery = useApiQuery<any>({
     queryKey: qk.me.taskStats(selectedEnrollmentId, menteeActiveClanId),

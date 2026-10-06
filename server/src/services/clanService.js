@@ -1,11 +1,13 @@
 const { models, sequelize } = require('../db');
-const { NotFoundError, ValidationError, ConflictError, AuthorizationError } = require('../utils/errors/errorTypes');
+const { NotFoundError, ValidationError, ConflictError, AuthorizationError, ForbiddenError } = require('../utils/errors/errorTypes');
 const { createAuditLog } = require('../utils/auditContext');
 const { ROLES } = require('../config/roles');
 const authzService = require('./authzService');
 const { PERMISSIONS: P } = require('../config/permissions');
 const { VISIBLE_MEMBERSHIP_STATUSES, strongestClanRole } = require('../config/membership');
 const { ensureMenteeProfile } = require('./menteeProfile');
+const standingClanService = require('./standingClanService');
+const clanLifecycleService = require('./clanLifecycleService');
 
 // The permissions a co-mentor holds by default — and therefore the exact set a
 // lead mentor / admin may toggle on or off for an individual co-mentor. Derived
@@ -79,7 +81,11 @@ class ClanService {
     }
 
     const baseInclude = [
-      { model: models.Program, as: 'program', attributes: ['id', 'name', 'status'] },
+      {
+        model: models.Program,
+        as: 'program',
+        attributes: ['id', 'name', 'status', 'startDate', 'endDate', 'closedAt']
+      },
       { model: models.User, as: 'leadMentor', attributes: ['id', 'firstName', 'lastName', 'profilePictureUrl'] }
     ];
 
@@ -198,20 +204,23 @@ class ClanService {
     return out;
   }
 
-  async createClan(data, createdBy) {
+  async createClan(data, createdBy, { transaction: outerTransaction, standingApproval = false } = {}) {
     const { programId, name } = data;
     if (!programId || !name) {
       throw new ValidationError('programId and name are required');
     }
 
-    const program = await models.Program.findByPk(programId);
+    const program = await models.Program.findByPk(programId, { transaction: outerTransaction });
     if (!program) throw new NotFoundError('Program not found');
+    if (data.kind === 'standing' && !standingApproval) throw new ValidationError('Standing clans are created by approving a mentor request');
+    if (data.kind !== 'standing' && program.status === 'completed') throw new ValidationError('Reopen the program before creating a cohort clan');
 
-    return sequelize.transaction(async (transaction) => {
+    const create = async (transaction) => {
       await require('./organizationService').assertLimit(program.organizationId, 'clans', null, { transaction });
       const clan = await models.Clan.create({
         organizationId: program.organizationId,
         programId,
+        kind: standingApproval ? 'standing' : 'cohort',
         name,
         description: data.description || null,
         whatsappGroupLink: data.whatsappGroupLink || null,
@@ -239,12 +248,14 @@ class ClanService {
       }
 
       return clan;
-    });
+    };
+    return outerTransaction ? create(outerTransaction) : sequelize.transaction(create);
   }
 
   async updateClan(clanId, updates) {
     const { Op } = require('sequelize');
     return sequelize.transaction(async (transaction) => {
+      await clanLifecycleService.assertClanWritable(clanId, { transaction });
       const clan = await models.Clan.findByPk(clanId, { transaction });
       if (!clan) throw new NotFoundError('Clan not found');
 
@@ -313,6 +324,11 @@ class ClanService {
 
     const clan = await models.Clan.findByPk(clanId, { transaction: outerTransaction });
     if (!clan) throw new NotFoundError('Clan not found');
+    if (clan.frozenAt && clan.kind !== 'standing') throw new ForbiddenError('This cohort clan is historical. Reopen its program to change the roster.');
+    if (clan.kind === 'standing') enrollmentId = null;
+    if (clan.kind === 'standing' && role === 'mentee' && actor && !outerTransaction) {
+      return (await standingClanService.addMenteesToStandingClan(clanId, [userId], actor))[0];
+    }
 
     const user = await models.User.findByPk(userId, { transaction: outerTransaction });
     if (!user) throw new NotFoundError('User not found');
@@ -348,6 +364,7 @@ class ClanService {
         membership.role = role;
         membership.status = 'active';
         membership.leftAt = null;
+        if (clan.kind === 'standing') { membership.enrollmentId = null; membership.joinedAt = new Date(); }
         if (enrollmentId) membership.enrollmentId = enrollmentId;
         await membership.save({ transaction });
       } else {
@@ -379,6 +396,7 @@ class ClanService {
         // the moment they become a mentee.
         await ensureMenteeProfile(userId, { transaction });
 
+        if (clan.kind === 'standing') return membership;
         let enrollment = await models.Enrollment.findOne({
           where: { menteeId: userId, programId: clan.programId },
           transaction
@@ -425,6 +443,7 @@ class ClanService {
    */
   async removeMember(clanId, userId, role = null) {
     const { Op } = require('sequelize');
+    await clanLifecycleService.assertClanWritable(clanId);
     if (role && !CAPABILITY_FOR_CLAN_ROLE[role]) throw new ValidationError(`Invalid clan role: ${role}`);
 
     const memberships = await models.ClanMembership.findAll({
@@ -499,7 +518,9 @@ class ClanService {
       if (await authzService.can(user, key, resource)) permissions.push(key);
     }));
 
-    return { role, canManageTeam, canAddMentees, permissions: permissions.sort() };
+    const clan = await models.Clan.findByPk(clanId, { attributes: ['kind', 'frozenAt'] });
+    const readOnly = clan?.kind !== 'standing' && Boolean(clan?.frozenAt);
+    return { role, canManageTeam: canManageTeam && !readOnly, canAddMentees: canAddMentees && !readOnly, readOnly, permissions: permissions.sort() };
   }
 
   /**
@@ -546,6 +567,7 @@ class ClanService {
    * `clan.manage_members @ clan` guard, which co-mentors deliberately don't hold.
    */
   async setMemberPermissions(clanId, userId, denied, actorId = null) {
+    await clanLifecycleService.assertClanWritable(clanId);
     if (!(await this.isCoMentorInClan(clanId, userId))) {
       throw new ValidationError('That person is not a co-mentor of this clan');
     }
@@ -587,8 +609,10 @@ class ClanService {
    */
   async reassignMentee(menteeId, toClanId, actorId = null) {
     const { Op } = require('sequelize');
-    const toClan = await models.Clan.findByPk(toClanId, { attributes: ['id', 'programId'] });
+    await clanLifecycleService.assertClanWritable(toClanId);
+    const toClan = await models.Clan.findByPk(toClanId, { attributes: ['id', 'programId', 'kind'] });
     if (!toClan) throw new NotFoundError('Target clan not found');
+    if (toClan.kind === 'standing') throw new ValidationError('Add mentees to this standing clan without transferring them');
     const mentee = await models.User.findByPk(menteeId, { attributes: ['id'] });
     if (!mentee) throw new NotFoundError('Mentee not found');
 
@@ -601,7 +625,7 @@ class ClanService {
         role: 'mentee',
         status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES }
       },
-      include: [{ model: models.Clan, as: 'clan', attributes: ['id', 'programId'] }]
+      include: [{ model: models.Clan, as: 'clan', attributes: ['id', 'programId'], required: true, where: { kind: 'cohort', frozenAt: null } }]
     });
     if (oldMemberships.some((m) => m.clanId === toClanId)) {
       throw new ValidationError('That mentee is already in this clan');
@@ -652,6 +676,19 @@ class ClanService {
    */
   async listAvailableMembers({ q, clanId = null, includePlaced = false } = {}) {
     const { Op } = require('sequelize');
+    const selectedClan = clanId && await models.Clan.findByPk(clanId);
+    if (selectedClan?.kind === 'standing') {
+      const current = await models.ClanMembership.findAll({ where: { clanId, role: 'mentee', status: { [Op.in]: ['active', 'paused'] } }, attributes: ['userId'] });
+      const profiles = await models.MenteeProfile.findAll({ attributes: ['userId'] });
+      const workspaceMembers = await models.OrganizationMembership.findAll({ where: { organizationId: selectedClan.organizationId, status: 'active' }, attributes: ['userId'] });
+      const permitted = new Set(workspaceMembers.map(m => m.userId));
+      const already = new Set(current.map(m => m.userId));
+      const ids = profiles.map(p => p.userId).filter(id => permitted.has(id) && !already.has(id));
+      const where = { id: { [Op.in]: ids }, status: 'active' };
+      if (q?.trim()) where[Op.or] = ['firstName', 'lastName', 'email'].map(key => ({ [key]: { [Op.iLike]: `%${q.trim()}%` } }));
+      const users = await models.User.findAll({ where, attributes: ['id', 'firstName', 'lastName', 'email'], order: [['firstName', 'ASC']], limit: 100 });
+      return users.map(u => ({ ...u.toJSON(), name: `${u.firstName} ${u.lastName}` }));
+    }
     const placements = await models.ClanMembership.findAll({
       where: { status: { [Op.in]: ['active', 'paused'] }, role: 'mentee' },
       attributes: ['userId', 'clanId'],
@@ -767,6 +804,9 @@ class ClanService {
     if (!email || !email.trim()) throw new ValidationError('Email is required');
     const clan = await models.Clan.findByPk(clanId);
     if (!clan) throw new NotFoundError('Clan not found');
+    // Standing invites reuse the same registration-invite path; addMember keeps
+    // enrollmentId null for standing so completed-cohort enrollments stay untouched.
+    if (clan.frozenAt && clan.kind !== 'standing') throw new ValidationError('This completed cohort clan is read-only');
     const adminService = require('./adminService');
     return adminService.createRegistrationInvite(
       { email: email.trim(), role: 'mentee', clanId, programId: clan.programId },
@@ -777,8 +817,8 @@ class ClanService {
   async getMembershipsForUser(userId) {
     const { Op } = require('sequelize');
     const direct = await models.ClanMembership.findAll({
-      where: { userId, status: 'active' },
-      include: [{ model: models.Clan, as: 'clan', attributes: ['id', 'name', 'programId', 'status'] }],
+      where: { userId, status: { [Op.in]: ['active', 'paused'] } },
+      include: [{ model: models.Clan, as: 'clan', attributes: ['id', 'name', 'programId', 'status', 'kind', 'frozenAt'] }],
       order: [['joinedAt', 'DESC']]
     });
     const out = direct.map((m) => m.toJSON());
@@ -795,7 +835,7 @@ class ClanService {
     if (missingClanIds.length) {
       const clans = await models.Clan.findAll({
         where: { id: { [Op.in]: missingClanIds } },
-        attributes: ['id', 'name', 'programId', 'status'],
+        attributes: ['id', 'name', 'programId', 'status', 'kind', 'frozenAt'],
       });
       const clanById = new Map(clans.map((c) => [c.id, c.toJSON()]));
       for (const g of grants) {
@@ -820,6 +860,7 @@ class ClanService {
       include: [{
         model: models.Clan,
         as: 'clan',
+        where: { kind: 'cohort' },
         attributes: ['id', 'name', 'programId', 'status'],
         include: [
           { model: models.Program, as: 'program', attributes: ['id', 'name', 'status', 'visibility', 'description'] },
@@ -877,7 +918,7 @@ class ClanService {
         model: models.Clan,
         as: 'clan',
         attributes: ['id', 'name', 'programId', 'status'],
-        where: { programId },
+        where: { programId, kind: 'cohort' },
         required: true,
         include: [
           { model: models.Program, as: 'program', attributes: ['id', 'name', 'status', 'visibility', 'description'] },

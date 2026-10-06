@@ -2,6 +2,9 @@ jest.mock('../../src/db', () => ({
   models: {
     Organization: { findAll: jest.fn(async () => [{ id: 'owner-org', slug: 'owner' }]) },
     CertificateTemplate: { findByPk: jest.fn() },
+    CertificateInstance: { findAll: jest.fn() },
+    CertificateVerification: { findAll: jest.fn() },
+    CertificateClanApproval: { findAll: jest.fn() },
     AIEvaluationQueue: { findOne: jest.fn(), findAll: jest.fn() },
     User: { findAll: jest.fn(), findByPk: jest.fn() },
   },
@@ -32,6 +35,9 @@ beforeEach(() => {
     return [job];
   });
   models.CertificateTemplate.findByPk.mockResolvedValue({ id: 'template', organizationId: 'owner-org' });
+  models.CertificateInstance.findAll.mockResolvedValue([]);
+  models.CertificateVerification.findAll.mockResolvedValue([]);
+  models.CertificateClanApproval.findAll.mockResolvedValue([]);
   models.User.findAll.mockResolvedValue([]);
   models.User.findByPk.mockResolvedValue(null);
   sequelize.query.mockResolvedValue([{ completedCount: 1, totalCount: 1 }]);

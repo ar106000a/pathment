@@ -5,6 +5,9 @@ const { models } = require('../../src/db');
 const clans = require('../../src/services/clanService');
 const cohort = require('../../src/services/cohortService');
 const health = require('../../src/services/clanHealthService');
+const { setDefaultRequestContext } = require('../../src/utils/auditContext');
+
+beforeAll(() => setDefaultRequestContext({ organizationId: 'scale-org' }));
 
 test('30,000 mentees: bounded batches, unique org totals, shared snapshot, paginated follow-ups', async () => {
   const clanRows = Array.from({length:70}, (_, i) => ({id:`c${i}`,name:`Clan ${i}`,programId:'p',program:{id:'p',name:'Program'},leadMentor:null}));
@@ -22,13 +25,14 @@ test('30,000 mentees: bounded batches, unique org totals, shared snapshot, pagin
   expect(queue.rows).toHaveLength(20);
   expect(queue.pages).toBe(1500);
   expect(queue.total).toBe(30000);
-  expect(cohort.preloadMenteeData).toHaveBeenCalledTimes(150);
+  // Each clan is a separate scoring peer group, so its own batches are loaded.
+  expect(cohort.preloadMenteeData).toHaveBeenCalledTimes(210);
   expect(cohort.preloadMenteeData.mock.calls.every(([ids])=>ids.length<=200)).toBe(true);
   expect(clans.listClans).toHaveBeenCalledTimes(1);
   expect(queue.rows.every(row=>!('completedTasks' in row))).toBe(true);
   const filtered = await health.followUps({clanId:'c0',search:'u0',limit:50},['p']);
   expect(filtered.rows.map(row=>row.id)).toEqual(['u0']);
-  expect(cohort.preloadMenteeData).toHaveBeenCalledTimes(150);
+  expect(cohort.preloadMenteeData).toHaveBeenCalledTimes(210);
 });
 
 test('program scopes never reuse an organization snapshot', async () => {

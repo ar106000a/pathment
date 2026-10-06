@@ -5,7 +5,7 @@ function mergeResults(previous, incoming) {
   const merged = new Map();
   for (const result of [...(Array.isArray(previous) ? previous : []), ...incoming]) {
     const id = result?.mentee_id || result?.id;
-    if (!id || result._failed) continue;
+    if (!id || result._failed || result._skipped) continue;
     const existing = merged.get(id);
     // An older, slower run must not replace a newer decision.
     if (existing?.evaluatedAt && result.evaluatedAt &&

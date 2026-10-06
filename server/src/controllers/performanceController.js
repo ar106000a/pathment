@@ -5,6 +5,9 @@ const performanceService = require('../services/performanceService');
 const scoringSettingsService = require('../services/scoringSettingsService');
 const cohortService = require('../services/cohortService');
 const authzService = require('../services/authzService');
+const { resolveMenteeClanId } = require('../services/menteeClanScope');
+const { requestedClanId } = require('../middlewares/portalScope');
+const { PERMISSIONS } = require('../config/permissions');
 const { ForbiddenError, NotFoundError } = require('../utils/errors/errorTypes');
 
 /**
@@ -18,7 +21,7 @@ const { ForbiddenError, NotFoundError } = require('../utils/errors/errorTypes');
 
 /** Every clan this person runs, or throws if they do not run the one asked for. */
 async function assertRunsClan(user, clanId) {
-  if (await authzService.can(user, require('../config/permissions').PERMISSIONS.MENTEE_VIEW, { orgWide: true })) return;
+  if (await authzService.can(user, PERMISSIONS.MENTEE_VIEW, { orgWide: true })) return;
   const clanIds = await authzService.mentoredClanIds(user.id);
   if (!clanIds.includes(clanId)) {
     throw new ForbiddenError('You do not run that clan');
@@ -63,8 +66,9 @@ exports.clanStanding = catchAsync(async (req, res) => {
  * relative) but only the rank is returned. Nobody needs their peers' parts.
  */
 exports.myPerformance = catchAsync(async (req, res) => {
+  const clanId = await resolveMenteeClanId(req.user.id, requestedClanId(req));
   const membership = await models.ClanMembership.findOne({
-    where: { userId: req.user.id, role: 'mentee', status: 'active' },
+    where: { userId: req.user.id, role: 'mentee', status: 'active', ...(clanId ? { clanId } : {}) },
     attributes: ['clanId']
   });
 
@@ -103,7 +107,7 @@ exports.myPerformance = catchAsync(async (req, res) => {
       evidence: me.evidence,
       eligible: me.eligible,
       notRankedBecause: me.notRankedBecause,
-      rank: rank >= 0 ? rank + 1 : null,
+      rank: me.historical ? me.rank : rank >= 0 ? rank + 1 : null,
       outOf: ranked.length,
       weights,
       disabled

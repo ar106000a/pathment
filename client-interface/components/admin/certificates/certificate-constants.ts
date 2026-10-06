@@ -20,6 +20,8 @@ export interface TierCriteria {
   minAvgRating?: number | null;
   minAttendanceRate?: number | null;
   customRule?: string | null;
+  /** Optional human/AI attestations required before this tier can be awarded. */
+  reviewChecklist?: string[];
 }
 
 
@@ -86,5 +88,4 @@ export const BACKGROUND_PRESETS: BackgroundPreset[] = [
 export const BACKGROUND_PRESETS_MAP: Record<string, BackgroundPreset> = Object.fromEntries(
   BACKGROUND_PRESETS.map(p => [p.id, p])
 );
-
 

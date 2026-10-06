@@ -5,6 +5,7 @@ const notificationOrchestrator = require('./notificationOrchestrator');
 const { NOTIFICATION_EVENTS } = require('../config/notificationMatrix');
 const { endOfDayInZone } = require('../utils/timezone');
 const authzService = require('./authzService');
+const clanLifecycleService = require('./clanLifecycleService');
 const { PERMISSIONS } = require('../config/permissions');
 const { pointsForDifficulty } = require('../config/points');
 const { difficultyWeight } = require('../config/scoring');
@@ -124,17 +125,25 @@ class TaskService {
 
     const clanId = await resolveMenteeClanId(menteeId, requestedClanId, { actorId: mentorId });
     if (!clanId) throw new ValidationError('Mentee has no clan membership to attach this task to');
+    const taskClan = await models.Clan.findByPk(clanId);
+    await clanLifecycleService.assertClanWritable(clanId);
+    const actor = await models.User.findByPk(mentorId);
+    if (!await authzService.can(actor, PERMISSIONS.TASK_ASSIGN, await authzService.scopeOfClan(clanId))) throw new ForbiddenError('You cannot assign work in this clan');
+    if (taskClan?.kind === 'standing') {
+      if (enrollmentId) throw new ValidationError('Standing clan tasks cannot use a program enrollment');
+      enrollmentId = null;
+    }
 
     // Resolve the active enrollment if the caller didn't supply one (the assign
     // drawer only knows the mentee). Falls back to most-recent enrollment.
-    if (!enrollmentId) {
+    if (!enrollmentId && taskClan?.kind !== 'standing') {
       const membership = await models.ClanMembership.findOne({
         where: { userId: menteeId, clanId, role: 'mentee' },
         attributes: ['enrollmentId']
       });
       enrollmentId = membership?.enrollmentId || null;
       if (!enrollmentId) {
-        const enrollment = await this._activeEnrollmentForMentee(menteeId);
+        const enrollment = await models.Enrollment.findOne({ where: { menteeId, programId: taskClan.programId } });
         if (!enrollment) throw new NotFoundError('Mentee has no enrollment to attach this task to');
         enrollmentId = enrollment.id;
       }
@@ -366,14 +375,17 @@ class TaskService {
       throw new ValidationError('menteeIds is required');
     }
     const results = [];
+    let frozenError = null;
     for (const menteeId of menteeIds) {
       try {
         await this.createCustomTask({ ...taskFields, menteeId }, mentorId);
         results.push({ menteeId, ok: true });
       } catch (err) {
-        results.push({ menteeId, ok: false, error: err.message });
+        if (err.code === 'CLAN_FROZEN') frozenError = frozenError || err;
+        results.push({ menteeId, ok: false, error: err.message, code: err.code || null });
       }
     }
+    if (frozenError && results.every((row) => row.code === 'CLAN_FROZEN')) throw frozenError;
     return { results, assigned: results.filter((r) => r.ok).length };
   }
 
@@ -637,6 +649,7 @@ class TaskService {
     if (!task) {
       throw new NotFoundError('Task not found');
     }
+    await clanLifecycleService.assertTaskWritable(task);
 
     if (task.menteeId !== menteeId) {
       throw new ForbiddenError('This task is not assigned to you');
@@ -693,6 +706,7 @@ class TaskService {
     if (!task) {
       throw new NotFoundError('Task not found');
     }
+    await clanLifecycleService.assertTaskWritable(task);
 
     if (!(await authzService.canActOnTask(mentorId, task, PERMISSIONS.TASK_REVIEW))) {
       throw new ForbiddenError('You do not have permission to review this task');
@@ -756,6 +770,7 @@ class TaskService {
     if (!task) {
       throw new NotFoundError('Task not found');
     }
+    await clanLifecycleService.assertTaskWritable(task);
 
     // Permissions (derived, not base-role): the mentee may drive their own task;
     // anyone else must be able to manage it (lead/co-mentor of the clan, admin,
@@ -837,9 +852,12 @@ class TaskService {
    * as complete. Flags the enrollment ready for the mentor's sign-off when done.
    */
   async updateEnrollmentTaskStats(enrollmentId) {
+    if (!enrollmentId) return;
     // Load enrollment to know which program we're in
     const enrollment = await models.Enrollment.findByPk(enrollmentId);
     if (!enrollment) return null;
+    const program = await models.Program.findByPk(enrollment.programId);
+    if (program?.closedAt) return enrollment;
 
     // Progress is measured against the mentee's ACTUAL workload - every
     // non-cancelled task assigned to this enrollment - and completed is the done
@@ -848,6 +866,8 @@ class TaskService {
     // custom heuristic undercounted tasks assigned from non-base/local roadmaps,
     // which falsely hit 100% and prematurely triggered completion).
     const assignedTasks = await models.AssignedTask.findAll({
+      // Standing-clan tasks never carry enrollment_id, so they cannot appear here.
+      // Keep this filter as enrollmentId only so existing cohort progress is unchanged.
       where: { enrollmentId },
       // Difficulty is needed to weight the bar. Without it, progress counts
       // rows, and a five minute task moves it as far as a week of work.
@@ -1104,6 +1124,7 @@ class TaskService {
     if (!task) {
       throw new NotFoundError('Task not found');
     }
+    await clanLifecycleService.assertTaskWritable(task);
 
     if (!task.isCustomTask) {
       throw new ValidationError('Only custom tasks can be deleted');
@@ -1163,6 +1184,7 @@ class TaskService {
   async updateAssignedTask(taskId, userId, userRole, data = {}) {
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
+    await clanLifecycleService.assertTaskWritable(task);
     if (task.status === 'completed') throw new ValidationError('Cannot edit a completed task');
 
     if ('typeOverride' in data) {
@@ -1210,6 +1232,7 @@ class TaskService {
   async reactivateTask(taskId, userId, userRole, { dueDate } = {}) {
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
+    await clanLifecycleService.assertTaskWritable(task);
     if (task.status !== 'cancelled') throw new ValidationError('Only a cancelled task can be reassigned');
 
     task.status = 'assigned';
@@ -1243,6 +1266,7 @@ class TaskService {
     if (!task) {
       throw new NotFoundError('Task not found');
     }
+    await clanLifecycleService.assertTaskWritable(task);
 
     // Authorization (derived): admins, the assigning mentor, or a lead/co-mentor
     // of the mentee's clan who can review/assign there.
@@ -1278,6 +1302,7 @@ class TaskService {
       include: [{ model: models.RoadmapTask, as: 'roadmapTask', attributes: ['title'] }]
     });
     if (!task) throw new NotFoundError('Task not found');
+    await clanLifecycleService.assertTaskWritable(task);
 
     if (!(await authzService.canActOnTask(userId, task, PERMISSIONS.TASK_ASSIGN))) {
       throw new ForbiddenError('You do not have permission to change this task\'s deadline');
@@ -1331,6 +1356,7 @@ class TaskService {
   async unassignTask(taskId, userId, userRole) {
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
+    await clanLifecycleService.assertTaskWritable(task);
 
     if (!(await authzService.canActOnTask(userId, task, PERMISSIONS.TASK_ASSIGN))) {
       throw new ForbiddenError('You do not have permission to unassign this task');

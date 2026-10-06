@@ -60,6 +60,8 @@ export interface NotificationItem {
   type: 'task' | 'feedback' | 'badge' | 'milestone' | 'message' | 'system' | 'challenge';
   // Which role's "hat" this notification concerns; 'any' = shown in every role.
   audience?: 'mentor' | 'mentee' | 'admin' | 'any';
+  /** Clan the work belongs to — null = legacy / unattributable (show in every clan). */
+  clanId?: string | null;
   title: string;
   message: string;
   status: 'unread' | 'read' | 'archived';

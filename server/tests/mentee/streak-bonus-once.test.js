@@ -127,11 +127,11 @@ describe('an unranked mentee is not given a rank', () => {
     expect(stats.leaderboardRank).toBeNull();
   });
 
-  it('reports a rank once points are earned', async () => {
+  it('does not invent a progress rank from points alone', async () => {
     await gamificationService.awardPoints(mentee.id, 20, 'task_completed', null, 'a task');
 
     const stats = await gamificationService.getUserGamificationStats(mentee.id);
     expect(stats.totalPoints).toBe(20);
-    expect(stats.leaderboardRank).toBe(1);
+    expect(stats.leaderboardRank).toBeNull();
   });
 });

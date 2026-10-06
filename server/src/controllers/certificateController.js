@@ -60,7 +60,9 @@ const uploadAsset = catchAsync(async (req, res) => {
  * when they overruled it.
  */
 const getMenteeEvidence = catchAsync(async (req, res) => {
-  const data = await certificateService.getMenteeEvidence(req.params.id, req.params.menteeId, req.user);
+  const data = await certificateService.getMenteeEvidence(req.params.id, req.params.menteeId, req.user, {
+    clanId: req.query.clanId || portalOf(req).clanId || null,
+  });
   res.status(200).json(successResponse('Certificate evidence retrieved', data));
 });
 
@@ -79,7 +81,12 @@ const sendToClans = catchAsync(async (req, res) => {
   const deadline = req.body?.deadline
     || new Date(Date.now() + VERIFICATION_WINDOW_DAYS * 86400000).toISOString();
   const result = await certificateVerificationService.sendToClans(
-    req.params.id, { deadline, clanIds: req.body?.clanIds || null }, req.user
+    req.params.id, {
+      deadline,
+      clanIds: req.body?.clanIds || null,
+      menteeIds: req.body?.menteeIds || null,
+      assignments: req.body?.assignments || null
+    }, req.user
   );
   res.status(200).json(successResponse(
     `Sent to ${result.notified} mentor(s) for verification`,
@@ -124,12 +131,22 @@ const resendAllTemplateCertificates = catchAsync(async (req, res) => {
 });
 
 const runAIEvaluation = catchAsync(async (req, res) => {
-  const result = await certificateService.runAIEvaluation(req.params.id, req.query.mentorId, req.user, { clanId: portalOf(req).clanId });
+  const result = await certificateService.runAIEvaluation(req.params.id, req.query.mentorId, req.user, {
+    clanId: portalOf(req).clanId,
+    menteeIds: req.body?.menteeIds || null
+  });
   if (result.total === 0) {
-    return res.status(200).json(successResponse('No active mentees found in this program.', [], 200));
+    const skipped = result.skipped?.total || 0;
+    return res.status(200).json(successResponse(
+      skipped
+        ? `Nothing to evaluate. ${skipped} mentee(s) were skipped because their certificate was reviewed, approved, or issued.`
+        : 'No active mentees found in this program.',
+      result,
+      200
+    ));
   }
   res.status(202).json(successResponse(
-    `Queued ${result.total} mentee evaluations. Results will arrive via real-time updates.`,
+    `Queued ${result.total} mentee evaluations${result.skipped?.total ? `; skipped ${result.skipped.total} finalized mentee(s)` : ''}. Results will arrive via real-time updates.`,
     result,
     202
   ));
@@ -153,7 +170,7 @@ const listVerifications = catchAsync(async (req, res) => {
 const verifyOne = catchAsync(async (req, res) => {
   const row = await certificateVerificationService.verify(
     req.params.id, req.params.menteeId,
-    { decision: req.body.decision, finalTier: req.body.finalTier, reason: req.body.reason },
+    { decision: req.body.decision, finalTier: req.body.finalTier, reason: req.body.reason, criteriaChecks: req.body.criteriaChecks },
     req.user
   );
   res.status(200).json(successResponse('Grade verified', { verification: row }));

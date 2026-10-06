@@ -41,6 +41,7 @@ describe('certificate evidence for one mentee', () => {
       menteeId: mentee.id,
       mentorId: lead.id,
       enrollmentId: enrollment.id,
+      clanId: clan.id,
       status,
       isCustomTask: custom,
       dueDate: new Date(Date.now() + 7 * 86400000),

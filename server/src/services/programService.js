@@ -8,6 +8,7 @@ const {
   ValidationError 
 } = require('../utils/errors/errorTypes');
 const notificationOrchestrator = require('./notificationOrchestrator');
+const organizationService = require('./organizationService');
 const { NOTIFICATION_EVENTS } = require('../config/notificationMatrix');
 
 // Helper function for audit logging (non-blocking)
@@ -19,7 +20,6 @@ class ProgramService {
    * Create a new program
    */
   async createProgram(programData, createdBy) {
-    const organizationService = require('./organizationService');
     const organizationId = await organizationService.currentId();
     const {
       name,
@@ -40,6 +40,7 @@ class ProgramService {
     } = programData;
 
     // Validate dates
+    if (status === 'completed') throw new ValidationError('Create the program first, then use the formal close action');
     if (startDate && endDate && new Date(startDate) >= new Date(endDate)) {
       throw new ValidationError('End date must be after start date');
     }
@@ -535,6 +536,7 @@ class ProgramService {
    * Clone program (create from template)
    */
   async cloneProgram(programId, userId, customizations = {}) {
+    if (customizations.status === 'completed') throw new ValidationError('Use program close to finalize results');
     const sourceProgram = await models.Program.findByPk(programId);
 
     if (!sourceProgram) {
@@ -554,9 +556,11 @@ class ProgramService {
       totalReviews: 0,
       publishedAt: null,
       archivedAt: null,
+      closedAt: null,
       createdAt: undefined,
       updatedAt: undefined,
-      ...customizations
+      ...customizations,
+      closedAt: null
     };
 
     const clonedProgram = await models.Program.create(clonedData);

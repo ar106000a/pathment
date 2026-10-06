@@ -30,6 +30,8 @@ EXTENSION_HANDLED: 'extension_handled',
   NEW_MENTEE_IN_CLAN: 'new_mentee_in_clan',
   CLAN_JOIN_REQUEST_RECEIVED: 'clan_join_request_received',
   CLAN_JOIN_REQUEST_DECIDED: 'clan_join_request_decided',
+  STANDING_CLAN_REQUEST_CREATED: 'standing_clan_request_created',
+  STANDING_CLAN_REQUEST_DECIDED: 'standing_clan_request_decided',
   MENTEE_TRANSFER_REQUESTED: 'mentee_transfer_requested',
   MENTEE_TRANSFER_DECIDED: 'mentee_transfer_decided',
   PROMOTION_NOMINATED: 'promotion_nominated',
@@ -320,6 +322,20 @@ const NOTIFICATION_MATRIX = {
     preferenceKey: 'clan_join_request_decided',
     channels: { inApp: true, email: true, chat: false }
   },
+  // Mentor asked for a fresh standing clan after program close — admins decide
+  // in the notification drawer (Approve / Reject).
+  [NOTIFICATION_EVENTS.STANDING_CLAN_REQUEST_CREATED]: {
+    type: 'system',
+    audience: 'admin',
+    preferenceKey: 'standing_clan_request_created',
+    channels: { inApp: true, email: true, chat: false }
+  },
+  [NOTIFICATION_EVENTS.STANDING_CLAN_REQUEST_DECIDED]: {
+    type: 'system',
+    audience: 'mentor',
+    preferenceKey: 'standing_clan_request_decided',
+    channels: { inApp: true, email: true, chat: false }
+  },
   // Another mentor asks THIS clan to take one of their mentees. Always in-app;
   // the email is dispatched with emailOnlyIfOffline so someone who is already in
   // the app just gets the bell (see notificationOrchestrator.dispatch).
@@ -483,6 +499,7 @@ const EMAIL_PREFERENCE_CATEGORIES = [
   { group: 'Program', key: 'cross_clan_assigned', label: 'I\'m asked to cover or help another clan' },
   { group: 'Program', key: 'new_mentee_in_clan', label: 'A new mentee joins my clan' },
   { group: 'Program', key: 'promotion_nominated', label: 'A mentee is nominated for promotion (admins)' },
+  { group: 'Program', key: 'standing_clan_request_created', label: 'A mentor requests a standing clan (admins)' },
   { group: 'Milestones', key: 'completion_ready_for_signoff', label: 'Completion is ready for sign-off' },
   { group: 'Milestones', key: 'program_completed', label: 'A program is completed' },
   { group: 'Milestones', key: 'certificate_awarded', label: 'A certificate is awarded to me' },

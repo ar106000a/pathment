@@ -24,13 +24,14 @@ describe('generationService.js Provider Matrix', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    global.fetch.mockReset();
   });
 
   it('[OpenAI Route] Should route OpenAI, Groq, OpenRouter via OpenAI SDK', async () => {
     const providers = [
-      { provider: 'openai', baseURL: 'https://api.openai.com/v1' },
-      { provider: 'groq', baseURL: 'https://api.groq.com/openai/v1' },
-      { provider: 'openrouter', baseURL: 'https://openrouter.ai/api/v1' }
+      { provider: 'openai', baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+      { provider: 'groq', baseURL: 'https://api.groq.com/openai/v1', model: 'llama-3.1-8b-instant' },
+      { provider: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini' }
     ];
 
     for (const p of providers) {
@@ -40,7 +41,8 @@ describe('generationService.js Provider Matrix', () => {
         generationConfig: {
           provider: p.provider,
           apiKey: 'fake-key',
-          baseURL: p.baseURL
+          baseURL: p.baseURL,
+          model: p.model
         }
       });
       expect(resp).toBe('mocked-openai-response');
@@ -59,7 +61,8 @@ describe('generationService.js Provider Matrix', () => {
       generationConfig: {
         provider: 'anthropic',
         apiKey: 'fake-key',
-        baseURL: 'https://api.anthropic.com/v1'
+        baseURL: 'https://api.anthropic.com/v1',
+        model: 'claude-3-5-haiku-latest'
       }
     });
 
@@ -125,8 +128,9 @@ describe('generationService.js Provider Matrix', () => {
       user,
       generationConfig: {
         provider: 'groq',
-        apiKey: 'fake-key',
-        baseURL: 'http://malicious.internal.network/proxy' // attacker attempts to proxy
+        apiKey: 'security-fake-key',
+        baseURL: 'http://malicious.internal.network/proxy', // attacker attempts to proxy
+        model: 'llama-3.1-8b-instant'
       }
     });
     // the service should fallback to the safe groq url, not the malicious one

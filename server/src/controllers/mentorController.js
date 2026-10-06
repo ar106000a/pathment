@@ -168,15 +168,17 @@ const getMentorById = catchAsync(async (req, res) => {
     : [];
 
   // De-dupe mentees (a person could be in more than one of the mentor's clans).
+  // Keep ALL clan memberships so standing + cohort dual members aren't tagged
+  // with only the first clan (sidebar scope would hide them from the other).
   const menteeById = new Map();
-  const clanByMentee = new Map();
+  const clansByMentee = new Map();
   for (const m of menteeMemberships) {
     if (!m.user) continue;
-    if (!menteeById.has(m.userId)) {
-      menteeById.set(m.userId, m.user);
-      const cl = clanRows.find((c) => c.clanId === m.clanId)?.clan;
-      clanByMentee.set(m.userId, { id: cl?.id, name: cl?.name, programId: cl?.programId });
-    }
+    if (!menteeById.has(m.userId)) menteeById.set(m.userId, m.user);
+    const cl = clanRows.find((c) => c.clanId === m.clanId)?.clan;
+    const list = clansByMentee.get(m.userId) || [];
+    list.push({ id: cl?.id || m.clanId, name: cl?.name, programId: cl?.programId });
+    clansByMentee.set(m.userId, list);
   }
   const menteeIds = [...menteeById.keys()];
 
@@ -205,11 +207,13 @@ const getMentorById = catchAsync(async (req, res) => {
   const activeMatches = menteeIds.map((mid) => {
     const list = enrollmentsByMentee.get(mid) || [];
     const enr = list.find((e) => !TERMINAL_ENROLLMENT_STATUSES.includes(e.status)) || list[0] || null;
+    const clans = clansByMentee.get(mid) || [];
     return {
       id: `${id}:${mid}`,
       status: 'active',
       mentee: menteeById.get(mid),
-      clan: clanByMentee.get(mid) || null,
+      clans,
+      clan: clans[0] || null,
       enrollment: enr
         ? {
             id: enr.id,

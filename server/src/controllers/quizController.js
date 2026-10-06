@@ -2,6 +2,7 @@ const quizKitService = require('../services/quizKitService');
 const quizSessionService = require('../services/quizSessionService');
 const { successResponse } = require('../utils/responses');
 const { catchAsync } = require('../middlewares/errorHandler');
+const { requestedClanId } = require('../middlewares/portalScope');
 
 /**
  * Quiz kit authoring — a mentor builds reusable auto-gradable quizzes (single /
@@ -45,13 +46,17 @@ exports.deleteKit = catchAsync(async (req, res) => {
 
 // GET /api/quizzes/assignments/:taskId
 exports.getCandidateQuiz = catchAsync(async (req, res) => {
-  const data = await quizSessionService.getForCandidate(req.params.taskId, req.user.id);
+  const data = await quizSessionService.getForCandidate(req.params.taskId, req.user.id, {
+    clanId: requestedClanId(req),
+  });
   res.status(200).json(successResponse('Quiz retrieved', data));
 });
 
 // POST /api/quizzes/assignments/:taskId/start
 exports.startQuiz = catchAsync(async (req, res) => {
-  const session = await quizSessionService.startOrResume(req.params.taskId, req.user.id);
+  const session = await quizSessionService.startOrResume(req.params.taskId, req.user.id, {
+    clanId: requestedClanId(req),
+  });
   res.status(200).json(successResponse('Quiz session ready', { session }));
 });
 

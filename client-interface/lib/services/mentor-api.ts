@@ -88,7 +88,9 @@ export const mentorApi = {
     apiClient.post(`/mentor/mentee/${menteeId}/attendance`, { status }),
   getReviewAttendance: () => apiClient.get<{ data: { attendance: Record<string, 'present' | 'absent' | 'excused'> } }>('/mentor/review/attendance'),
   getMenteeAttendanceHistory: (menteeId: string) =>
-    apiClient.get<{ data: { history: { sessionId: string; date: string | null; status: 'present' | 'absent' | 'excused'; title: string | null }[] } }>(`/mentor/mentee/${menteeId}/attendance/history`),
+    apiClient.get<{ data: { history: { sessionId: string; date: string | null; status: 'present' | 'absent' | 'excused'; title: string | null }[] } }>(
+      `/mentor/mentee/${menteeId}/attendance/history`,
+    ),
 
   // Dated, saved, editable cohort-review sessions (full history). Clan-scoped:
   // pass the active clan so lead + co-mentors of the same clan share one session.

@@ -3,6 +3,12 @@ const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const withPostgres = require('../helpers/privatePostgres.cjs');
 const { up, TABLES } = require('../../scripts/migrations/114_workspace_model_ownership');
+const { WORKSPACE_MODELS } = require('../../src/config/tenantOwnership');
+
+test('migration 114 keeps its historical inventory when later tables are added', () => {
+  assert.ok(Object.values(WORKSPACE_MODELS).includes('standing_clan_requests'));
+  assert.ok(!TABLES.includes('standing_clan_requests'));
+});
 
 test('workspace ownership migration preserves legacy rows and follows existing parents', async () => {
   await withPostgres(async db => {

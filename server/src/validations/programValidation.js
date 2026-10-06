@@ -322,6 +322,33 @@ const programValidation = {
       .valid('ASC', 'DESC')
       .default('DESC')
       .optional()
+  }),
+
+  idParams: Joi.object({
+    id: Joi.string().uuid().required()
+  }),
+
+  closeProgram: Joi.object({
+    // Optional backdated close; omit to use the current time.
+    closedAt: Joi.alternatives()
+      .try(
+        Joi.string().trim().pattern(/^\d{4}-\d{2}-\d{2}$/),
+        Joi.date().iso(),
+        Joi.valid(null, ''),
+      )
+      .optional(),
+  }),
+
+  reopenProgram: Joi.object({
+    reason: Joi.string()
+      .trim()
+      .min(1)
+      .max(4000)
+      .required()
+      .messages({
+        'string.empty': 'Explain why the program is being reopened',
+        'any.required': 'Explain why the program is being reopened'
+      })
   })
 };
 

@@ -16,7 +16,50 @@ function readStored(key: string): string | null {
   try { return window.localStorage.getItem(key); } catch { return null; }
 }
 
-export interface ClanLite { id: string; name: string; }
+export interface ClanLite { id: string; name: string; kind?: 'cohort' | 'standing'; frozenAt?: string | null; programId?: string; }
+
+/** Cohort clans become historical after formal program close. Standing clans stay writable. */
+export function isHistoricalCohortClan(clan?: Pick<ClanLite, 'kind' | 'frozenAt'> | null): boolean {
+  return Boolean(clan && clan.kind !== 'standing' && clan.frozenAt);
+}
+
+/**
+ * Resolve the clan the mentor UI should treat as selected.
+ * Single-clan mentors often keep `activeClanId === 'all'` because the picker is hidden —
+ * map that to the only clan so historical / standing checks still work.
+ */
+export function resolveActiveMentorClan(clans: ClanLite[], activeClanId: string): ClanLite | null {
+  if (!clans.length) return null;
+  if (activeClanId !== ALL_CLANS) return clans.find((c) => c.id === activeClanId) ?? null;
+  return clans.length === 1 ? clans[0] : null;
+}
+
+/** True when the current mentor scope is fully historical (no writable cohort work). */
+export function isHistoricalMentorScope(clans: ClanLite[], activeClanId: string): boolean {
+  if (activeClanId !== ALL_CLANS) {
+    return isHistoricalCohortClan(clans.find((c) => c.id === activeClanId) ?? null);
+  }
+  // "All clans": read-only only when every mentored clan is historical (or there are none writable).
+  return clans.length > 0 && clans.every((c) => isHistoricalCohortClan(c));
+}
+
+/**
+ * Whether mentor writes are locked for a row when the sidebar picker is set.
+ * - Specific clan selected → whole scope follows that clan (frozen cohort = locked).
+ * - All clans → lock per row from the item's clan (Standee writable; frozen cohort not).
+ *   Missing item clanId fails closed under All clans so we never guess.
+ */
+export function isMentorWriteLockedForClan(
+  clans: ClanLite[],
+  activeClanId: string,
+  itemClanId?: string | null,
+): boolean {
+  if (activeClanId !== ALL_CLANS) {
+    return isHistoricalCohortClan(clans.find((c) => c.id === activeClanId) ?? null);
+  }
+  if (!itemClanId) return true;
+  return isHistoricalCohortClan(clans.find((c) => c.id === itemClanId) ?? null);
+}
 
 interface ClanContextValue {
   /** Clans the current user mentors (drives the mentor scope selector). */
@@ -45,7 +88,7 @@ export function ClanProvider({ children }: { children: ReactNode }) {
   const isMentee = !!availableRoles?.includes('mentee');
 
   const { data = EMPTY_MEMBERSHIPS, loading } = useApiQuery<{ mentor: ClanLite[]; mentee: ClanLite[] }>({
-    queryKey: qk.clan.memberships,
+    queryKey: qk.clan.memberships(user?.id || ''),
     queryFn: async () => {
       const r = await clanApi.myMemberships() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
       const rows = r?.data?.memberships ?? r?.memberships ?? [];
@@ -58,16 +101,17 @@ export function ClanProvider({ children }: { children: ReactNode }) {
         if (!c) continue;
         if (MENTOR_CLAN_ROLES.includes(m.role) && !mentorSeen.has(c.id)) {
           mentorSeen.add(c.id);
-          mentor.push({ id: c.id, name: c.name });
+          mentor.push({ id: c.id, name: c.name, kind: c.kind, frozenAt: c.frozenAt, programId: c.programId });
         }
         if (m.role === 'mentee' && (m.status === 'active' || m.status === 'paused') && !menteeSeen.has(c.id)) {
           menteeSeen.add(c.id);
-          mentee.push({ id: c.id, name: c.name });
+          mentee.push({ id: c.id, name: c.name, kind: c.kind, frozenAt: c.frozenAt, programId: c.programId });
         }
       }
-      return { mentor, mentee };
+      const activeFirst = (a: ClanLite, b: ClanLite) => Number(!!a.frozenAt) - Number(!!b.frozenAt) || a.name.localeCompare(b.name);
+      return { mentor: mentor.sort(activeFirst), mentee: mentee.sort(activeFirst) };
     },
-    enabled: !!user && (isMentor || isMentee),
+    enabled: !!user?.id && (isMentor || isMentee),
     staleTime: STALE.long,
   });
 

@@ -243,7 +243,8 @@ export function VerificationBanner({
                     <p className="text-[10px] text-muted-foreground">{percent}% complete</p>
                   </div>
                   <div>
-                    {clan.overridden > 0 && onViewClan ? <button type="button" onClick={() => onViewClan(clan.clanId, clan.clanName, 'changed')} className="text-[11px] font-bold text-violet-600 hover:underline">{clan.overridden} changed</button> : <span className="text-[11px] text-muted-foreground">No changes</span>}
+                    {(clan.overridden + (clan.changeRequests ?? 0)) > 0 && onViewClan ? <button type="button" onClick={() => onViewClan(clan.clanId, clan.clanName, 'changed')} className="text-[11px] font-bold text-violet-600 hover:underline">{clan.overridden + (clan.changeRequests ?? 0)} change{clan.overridden + (clan.changeRequests ?? 0) === 1 ? '' : 's'}</button> : <span className="text-[11px] text-muted-foreground">No changes</span>}
+                    {!!clan.changeRequests && <p className="text-[10px] font-medium text-amber-600">{clan.changeRequests} awaiting admin</p>}
                     {!!clan.noCertificate && <p className="text-[10px] text-muted-foreground">{clan.noCertificate} no certificate</p>}
                   </div>
                   <div className="flex justify-start md:justify-end">

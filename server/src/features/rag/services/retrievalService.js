@@ -34,21 +34,34 @@ async function retrieveContext({ query, mentorId, menteeId, geminiApiKey }) {
       LIMIT :limit
     `;
 
-    const [vectorRows] = await sequelize.query(vectorQuery, {
-      replacements: {
-        organizationId: requireWorkspaceId(),
-        vec: `[${queryEmbedding.join(',')}]`,
+    const replacements = {
+      organizationId: requireWorkspaceId(),
+      mentorId,
+      menteeId: menteeId || null,
+    };
+    let vectorRows = [];
+    try {
+      [vectorRows] = await sequelize.query(vectorQuery, {
+        replacements: {
+          ...replacements,
+          vec: `[${queryEmbedding.join(',')}]`,
+          minSimilarity,
+          limit: vectorLimit
+        }
+      });
+    } catch (error) {
+      // pgvector is optional in local and recovery environments. Full-text
+      // search still gives a useful, tenant-scoped answer when it is absent.
+      logger.warn('Vector retrieval unavailable, continuing with full-text search', {
+        error: error.message,
         mentorId,
-        menteeId,
-        minSimilarity,
-        limit: vectorLimit
-      }
-    });
+      });
+    }
 
     // 2. Full-Text Search
     const ftsQuery = `
       SELECT id, content, visibility, source_type,
-             ts_rank(search_vector, websearch_to_tsquery('english', :query)) AS score
+             ts_rank(to_tsvector('english', content), websearch_to_tsquery('english', :query)) AS score
       FROM knowledge_chunks
       WHERE organization_id=:organizationId AND mentor_id = :mentorId
         AND visibility IN ('mentor','program')
@@ -57,21 +70,21 @@ async function retrieveContext({ query, mentorId, menteeId, geminiApiKey }) {
           source_type = 'mentor_document'
           OR mentee_id = :menteeId
         )
-        AND search_vector @@ websearch_to_tsquery('english', :query)
+        AND to_tsvector('english', content) @@ websearch_to_tsquery('english', :query)
       ORDER BY score DESC
       LIMIT :limit
     `;
 
     const [ftsRows] = await sequelize.query(ftsQuery, {
-      replacements: { query, mentorId, menteeId, limit: ftsLimit, organizationId: requireWorkspaceId() }
+      replacements: { ...replacements, query, limit: ftsLimit }
     });
 
     // 3. Reciprocal Rank Fusion
     const scores = new Map();
 
     const mergeIntoRrf = (rows) => {
-      rows.forEach(({ id, content }, idx) => {
-        const s = scores.get(id) || { id, content, score: 0 };
+      rows.forEach(({ id, content, source_type: sourceType, visibility }, idx) => {
+        const s = scores.get(id) || { id, content, source_type: sourceType, visibility, score: 0 };
         s.score += 1 / (rrfK + idx + 1);
         scores.set(id, s);
       });

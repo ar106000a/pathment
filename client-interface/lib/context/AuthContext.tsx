@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { User, AuthResponse, LoginCredentials, RegisterData, TwoFactorLoginResponse, UserRole } from '../types';
 import { isAxiosError } from 'axios';
 import { activeWorkspaceSlug } from '../services/workspace-scope';
@@ -8,6 +9,10 @@ import { apiClient } from '../services/api-client';
 import { apiConfig } from '../config/api';
 import { tokenStore } from '../services/token-store';
 import { startAuthSession, resetAuthSession } from '../services/auth-session';
+
+/** Keep in sync with ClanContext storage keys (avoid importing ClanContext here — circular). */
+const MENTOR_CLAN_STORAGE_KEY = 'pathment-active-clan';
+const MENTEE_CLAN_STORAGE_KEY = 'pathment-active-mentee-clan';
 
 /** An explicit empty capability list grants no role views. */
 function getCapabilities(user: User | null): UserRole[] {
@@ -46,7 +51,17 @@ const getHttpStatus = (error: unknown): number | undefined => {
   return (error as { response?: { status?: number } })?.response?.status;
 };
 
+function clearUserScopedClientState(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.clear();
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(MENTOR_CLAN_STORAGE_KEY);
+    localStorage.removeItem(MENTEE_CLAN_STORAGE_KEY);
+  } catch { /* ignore */ }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
@@ -186,6 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       tokenStore.setSession({ token: accessToken, refreshToken, user }, rememberMe);
       resetAuthSession(); // fresh session: re-arm proactive renewal, clear any prior expiry latch
+      clearUserScopedClientState(queryClient);
       setUser(user);
       setRequiresTwoFactor(false);
       setTemporaryToken(null);
@@ -228,6 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       tokenStore.setSession({ token: accessToken, refreshToken, user: currentUser }, rememberMe);
       resetAuthSession();
+      clearUserScopedClientState(queryClient);
       setUser(currentUser);
 
       // Clear 2FA state
@@ -263,6 +280,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       tokenStore.clearSession();
       if (typeof window !== 'undefined') localStorage.removeItem('activeRole');
+      clearUserScopedClientState(queryClient);
       setUser(null);
     }
   };

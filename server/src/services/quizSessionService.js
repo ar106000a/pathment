@@ -5,6 +5,8 @@ const notificationOrchestrator = require('./notificationOrchestrator');
 const { NOTIFICATION_EVENTS } = require('../config/notificationMatrix');
 const authzService = require('./authzService');
 const { PERMISSIONS } = require('../config/permissions');
+const submissionService = require('./submissionService');
+const clanLifecycleService = require('./clanLifecycleService');
 
 /**
  * QuizSessionService — the candidate runner + auto-grading + mentor review for
@@ -59,10 +61,11 @@ class QuizSessionService {
 
   // ── Context / shaping ────────────────────────────────────────────────────────
 
-  async _loadContext(taskId, menteeId) {
+  async _loadContext(taskId, menteeId, { clanId = null } = {}) {
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
     if (task.menteeId !== menteeId) throw new ForbiddenError('This quiz is not assigned to you');
+    if (clanId && task.clanId && task.clanId !== clanId) throw new NotFoundError('Task not found');
 
     const assignment = await models.QuizAssignment.findOne({ where: { assignedTaskId: taskId } });
     if (!assignment) throw new NotFoundError('This task is not a quiz');
@@ -97,8 +100,8 @@ class QuizSessionService {
     };
   }
 
-  async getForCandidate(taskId, menteeId) {
-    const { task, assignment, kit, questions } = await this._loadContext(taskId, menteeId);
+  async getForCandidate(taskId, menteeId, { clanId = null } = {}) {
+    const { task, assignment, kit, questions } = await this._loadContext(taskId, menteeId, { clanId });
 
     const sessions = await models.QuizSession.findAll({
       where: { assignedTaskId: taskId, menteeId },
@@ -165,8 +168,9 @@ class QuizSessionService {
 
   // ── Attempt lifecycle ────────────────────────────────────────────────────────
 
-  async startOrResume(taskId, menteeId) {
-    const { assignment } = await this._loadContext(taskId, menteeId);
+  async startOrResume(taskId, menteeId, { clanId = null } = {}) {
+    await clanLifecycleService.assertTaskWritable(taskId);
+    const { assignment } = await this._loadContext(taskId, menteeId, { clanId });
 
     const existing = await models.QuizSession.findOne({
       where: { assignedTaskId: taskId, menteeId, status: 'in_progress' },
@@ -217,6 +221,7 @@ class QuizSessionService {
   /** Upsert a single answer (autosave). Snapshots the question meta on first write. */
   async saveAnswer(sessionId, menteeId, questionId, payload = {}) {
     const session = await this._openSession(sessionId, menteeId);
+    await clanLifecycleService.assertTaskWritable(session.assignedTaskId);
     if (!questionId) throw new ValidationError('questionId is required');
 
     const question = await models.QuizQuestion.findByPk(questionId);
@@ -257,6 +262,7 @@ class QuizSessionService {
    */
   async submit(sessionId, menteeId) {
     const session = await this._openSession(sessionId, menteeId);
+    await clanLifecycleService.assertTaskWritable(session.assignedTaskId);
     const { task, assignment, questions } = await this._loadContext(session.assignedTaskId, menteeId);
 
     // Grade against the saved answers (create rows for skipped questions too).
@@ -330,7 +336,6 @@ class QuizSessionService {
     // Auto mode → finalize now (posts points + gamification, marks completed).
     let finalized = false;
     if (assignment.evaluationMode === 'auto') {
-      const submissionService = require('./submissionService');
       await submissionService.reviewSubmission(out.submissionId, task.mentorId, {
         decision: 'approved',
         isApproved: true,
@@ -498,9 +503,11 @@ class QuizSessionService {
 
   /** Override a per-answer grade (mentor, review mode). */
   async gradeAnswer(taskId, mentorId, questionId, { pointsAwarded, scoreNote } = {}) {
+    await clanLifecycleService.assertTaskWritable(taskId);
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
     await this._assertReviewer(mentorId, task);
+    await submissionService.assertClanWritableForReview(task.clanId);
 
     const session = await this._latestSubmittedSession(taskId);
     if (!session) throw new NotFoundError('No submitted quiz to grade');
@@ -529,6 +536,7 @@ class QuizSessionService {
   /** Finalize the review: sum the per-answer points and complete the task through
    *  the shared review path (points/gamification/notifications). */
   async finalizeReview(taskId, mentorId, { overallNote } = {}) {
+    await clanLifecycleService.assertTaskWritable(taskId);
     const task = await models.AssignedTask.findByPk(taskId);
     if (!task) throw new NotFoundError('Task not found');
     await this._assertReviewer(mentorId, task);
@@ -551,7 +559,6 @@ class QuizSessionService {
       { where: { id: submissionId } }
     );
 
-    const submissionService = require('./submissionService');
     await submissionService.reviewSubmission(submissionId, mentorId, {
       decision: 'approved',
       isApproved: true,

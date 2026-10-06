@@ -30,7 +30,8 @@ export function useNavBadges({
   isMentor,
   portal,
   activeClanId,
-}: { userId?: string; isMentor: boolean; portal: string; activeClanId: string }) {
+  menteeActiveClanId = ALL_CLANS,
+}: { userId?: string; isMentor: boolean; portal: string; activeClanId: string; menteeActiveClanId?: string }) {
   const client = useQueryClient();
 
   // Cache the conversations, derive the badge from them. The badge has to count
@@ -45,9 +46,10 @@ export function useNavBadges({
     staleTime: STALE.short,
   });
 
+  const messageClanId = portal === 'mentee' ? (menteeActiveClanId || ALL_CLANS) : (isMentor ? activeClanId : ALL_CLANS);
   const unreadMessageCount = useMemo(
-    () => unreadCountForClan(conversations, isMentor ? activeClanId : ALL_CLANS),
-    [conversations, isMentor, activeClanId]
+    () => unreadCountForClan(conversations, messageClanId),
+    [conversations, messageClanId]
   );
 
   const { data: approvalCounts = NO_COUNTS } = useMentorApprovalCounts(!!userId && isMentor);

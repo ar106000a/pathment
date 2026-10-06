@@ -7,12 +7,15 @@ import {
 } from 'lucide-react';
 import { downloadRoadmapJson } from '@/lib/utils/roadmap-json';
 import { useMentorRoadmaps, useMentorPrograms, useMentorCohort, type LinearRoadmap } from '@/lib/hooks/mentor';
+import { useClan, isHistoricalMentorScope } from '@/lib/context/ClanContext';
 import { mentorApi } from '@/lib/services/mentor-api';
 import { extractApiErrorMessage } from '@/lib/utils/api-error';
 import { Drawer } from '@/components/shared/Drawer';
 import { RoadmapEditorDrawer } from '@/components/mentor/RoadmapEditorDrawer';
 import { RoadmapStepsDrawer } from '@/components/mentor/RoadmapStepsDrawer';
 import { StepCustomizeModal } from '@/components/mentor/StepCustomizeModal';
+
+const HISTORICAL_TITLE = 'Completed programs are read-only';
 
 // Deadline quick-picks for assignment. `null` days = "Default" (use each step's
 // own timing). Shared shape with the custom-task drawer for consistency.
@@ -316,6 +319,8 @@ function RoadmapCard({ r, action }: { r: LinearRoadmap; action: React.ReactNode 
 export default function MentorRoadmaps() {
   const { local, org, loading, error, refetch } = useMentorRoadmaps();
   const { programs } = useMentorPrograms();
+  const { clans, activeClanId } = useClan();
+  const historical = isHistoricalMentorScope(clans, activeClanId);
   // Mentor wiring for the shared roadmap editor (org/admin pass their own).
   const editorApi = {
     create: (data: Parameters<typeof mentorApi.createRoadmap>[0]) => mentorApi.createRoadmap(data),
@@ -329,6 +334,7 @@ export default function MentorRoadmaps() {
   const [importingId, setImportingId] = useState<string | null>(null);
 
   const onImport = async (id: string) => {
+    if (historical) return;
     try {
       setImportingId(id);
       await mentorApi.importRoadmap(id);
@@ -348,8 +354,12 @@ export default function MentorRoadmaps() {
           <h1 className="text-slate-900 mb-2">Roadmaps</h1>
           <p className="text-slate-600">Build a sequence of steps, then assign it. Approving a step advances the mentee automatically.</p>
         </div>
-        <button onClick={() => setCreating(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 shrink-0">
+        <button
+          onClick={() => setCreating(true)}
+          disabled={historical}
+          title={historical ? HISTORICAL_TITLE : undefined}
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 shrink-0 disabled:opacity-50"
+        >
           <Plus className="w-4 h-4" />New roadmap
         </button>
       </div>
@@ -379,18 +389,18 @@ export default function MentorRoadmaps() {
                           can still be assigned by the whole clan team. */}
                       {r.isOwner !== false && (
                         <>
-                          <button onClick={() => setEditing(r)} title="Edit this roadmap"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:border-brand-300">
+                          <button onClick={() => setEditing(r)} disabled={historical} title={historical ? HISTORICAL_TITLE : 'Edit this roadmap'}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:border-brand-300 disabled:opacity-50">
                             <Pencil className="w-3.5 h-3.5" />Edit
                           </button>
-                          <button onClick={() => setChaining(r)} title="Set what comes next"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:border-brand-300">
+                          <button onClick={() => setChaining(r)} disabled={historical} title={historical ? HISTORICAL_TITLE : 'Set what comes next'}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:border-brand-300 disabled:opacity-50">
                             <GitBranch className="w-3.5 h-3.5" />Next
                           </button>
                         </>
                       )}
-                      <button onClick={() => setAssigning(r)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-xs font-medium hover:bg-brand-100">
+                      <button onClick={() => setAssigning(r)} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-xs font-medium hover:bg-brand-100 disabled:opacity-50">
                         <Users className="w-3.5 h-3.5" />Assign
                       </button>
                     </div>
@@ -407,7 +417,8 @@ export default function MentorRoadmaps() {
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {org.map((r) => (
                   <RoadmapCard key={r.id} r={r} action={
-                    <button onClick={() => onImport(r.id)} disabled={importingId === r.id}
+                    <button onClick={() => onImport(r.id)} disabled={historical || importingId === r.id}
+                      title={historical ? HISTORICAL_TITLE : undefined}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-medium hover:border-brand-300 disabled:opacity-50 shrink-0">
                       {importingId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}Import
                     </button>

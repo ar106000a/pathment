@@ -2,6 +2,7 @@ const { models, sequelize } = require('../db');
 const { Op } = require('sequelize');
 const { catchAsync } = require('../middlewares/errorHandler');
 const { successResponse } = require('../utils/responses');
+const { requestedClanId } = require('../middlewares/portalScope');
 
 const HEARTBEAT_INTERVAL_MINUTES = 5;
 const IDLE_THRESHOLD_MINUTES = 10;
@@ -166,6 +167,7 @@ const logPageView = catchAsync(async (req, res) => {
 const getMySummary = catchAsync(async (req, res) => {
   const userId = req.user.id;
   const days = Math.min(90, Math.max(1, parseInt(req.query.days) || 7));
+  const clanId = requestedClanId(req);
 
   const since = new Date();
   since.setDate(since.getDate() - days + 1);
@@ -187,11 +189,14 @@ const getMySummary = catchAsync(async (req, res) => {
       limit: 20,
       attributes: ['eventType', 'eventData', 'createdAt'],
     }),
+    // When a clan is selected, only count hours from that clan's tasks so
+    // completed-cohort work does not inflate standing-clan activity.
     models.AssignedTask.findAll({
       where: {
         menteeId: userId,
         submittedAt: { [Op.gte]: since },
         timeSpentHours: { [Op.ne]: null },
+        ...(clanId ? { clanId } : {}),
       },
       attributes: ['timeSpentHours'],
     }),

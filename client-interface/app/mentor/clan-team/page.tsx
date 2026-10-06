@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
+import { useClan, ALL_CLANS, isHistoricalCohortClan } from '@/lib/context/ClanContext';
 import { Check, ChevronDown, ChevronUp, Crown, HeartHandshake, Inbox, Link2, Loader2, Search, Shield, SlidersHorizontal, Trash2, UserPlus, Users2, X, Copy, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { apiClient } from '@/lib/services/api-client';
 import { clanApi } from '@/lib/services/clan-api';
+import { completionApi } from '@/lib/services/program-completion-api';
 import { clanRequestsApi } from '@/lib/services/clan-requests-api';
 import { extractApiErrorMessage } from '@/lib/utils/api-error';
 import { formatRelativeTime } from '@/lib/utils/date';
@@ -15,6 +16,7 @@ import { ClanAvatarEditor } from '@/components/shared/ClanAvatarEditor';
 import { Drawer } from '@/components/shared/Drawer';
 import { Avatar } from '@/components/shared/Avatar';
 import { CoMentorPermissionsDrawer } from '@/components/shared/CoMentorPermissionsDrawer';
+import { SelectMenu } from '@/components/shared/SelectMenu';
 import { IncomingTransfers, OutgoingTransfers } from '@/components/mentor/IncomingTransfers';
 import { useConfirm } from '@/lib/context/ConfirmContext';
 import { publicJoinBlockedMessage, publicJoinRequestLabel, publicJoinRequesterLocation, useClanPublicJoin } from '@/lib/hooks/mentor';
@@ -25,6 +27,8 @@ interface Member {
   user: { id: string; firstName: string; lastName: string; email: string; role: string; profilePictureUrl?: string | null };
 }
 interface ClanDetail {
+  kind?: 'cohort' | 'standing';
+  frozenAt?: string | null;
   avatarUrl?: string | null;
   id: string;
   name: string;
@@ -201,6 +205,8 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
   }
   if (!clan) return null;
 
+  const historical = isHistoricalCohortClan(clan);
+  const HISTORICAL_TITLE = 'Completed programs are read-only';
   const lead = members.filter((m) => m.role === 'lead_mentor');
   const co = members.filter((m) => m.role === 'co_mentor');
   const core = members.filter((m) => m.role === 'core_team');
@@ -236,10 +242,10 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
       )}
       <div className="flex items-center gap-1 shrink-0">
         {managePerms && canManageTeam && (
-          <button onClick={() => setPermMember(m)} className="p-1.5 rounded-md text-slate-400 hover:text-brand-600 hover:bg-brand-50" aria-label="Edit permissions" title="Edit permissions"><SlidersHorizontal className="w-4 h-4" /></button>
+          <button onClick={() => setPermMember(m)} disabled={historical} title={historical ? HISTORICAL_TITLE : 'Edit permissions'} className="p-1.5 rounded-md text-slate-400 hover:text-brand-600 hover:bg-brand-50 disabled:opacity-50" aria-label="Edit permissions"><SlidersHorizontal className="w-4 h-4" /></button>
         )}
         {removable && canManageTeam && (
-          <button onClick={() => remove(m)} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50" aria-label={`Remove as ${ROLE_LABEL[m.role]}`}><Trash2 className="w-4 h-4" /></button>
+          <button onClick={() => remove(m)} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 disabled:opacity-50" aria-label={`Remove as ${ROLE_LABEL[m.role]}`}><Trash2 className="w-4 h-4" /></button>
         )}
       </div>
     </div>
@@ -265,15 +271,15 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
         </div>
         {canManageTeam ? (
           <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => setAddingMentees(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 dark:bg-brand-500/15 px-3 py-2 text-sm font-medium text-brand-700 hover:bg-brand-100">
+            <button onClick={() => setAddingMentees(true)} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 dark:bg-brand-500/15 px-3 py-2 text-sm font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-50">
               <Users2 className="w-4 h-4" /> Add mentees
             </button>
-            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
+            <button onClick={() => setAdding(true)} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50">
               <UserPlus className="w-4 h-4" /> Add to team
             </button>
           </div>
         ) : canAddMentees ? (
-          <button onClick={() => setAddingMentees(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 dark:bg-brand-500/15 px-3 py-2 text-sm font-medium text-brand-700 hover:bg-brand-100 shrink-0">
+          <button onClick={() => setAddingMentees(true)} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 dark:bg-brand-500/15 px-3 py-2 text-sm font-medium text-brand-700 hover:bg-brand-100 shrink-0 disabled:opacity-50">
             <Users2 className="w-4 h-4" /> Add mentees
           </button>
         ) : (
@@ -297,7 +303,8 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
             <div className="flex gap-2 shrink-0">
               <button
                 onClick={handleSaveLink}
-                disabled={savingLink}
+                disabled={savingLink || historical}
+                title={historical ? HISTORICAL_TITLE : undefined}
                 className="px-4 py-2 bg-brand-600 hover:bg-brand-700 disabled:bg-brand-400 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
               >
                 {savingLink && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -351,7 +358,7 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
         </div>
       )}
 
-      {myRole === 'lead_mentor' && <PublicJoinLeadPanel clanId={clanId} onChanged={load} />}
+      {myRole === 'lead_mentor' && !(clan.frozenAt && clan.kind !== 'standing') && <PublicJoinLeadPanel clanId={clanId} onChanged={load} />}
 
       <div className="mt-5 space-y-5">
         <Section icon={<Crown className="w-3.5 h-3.5" />} title="Lead mentor" items={lead} removable={false} />
@@ -366,7 +373,7 @@ function ClanTeamCard({ clanId, myRole }: { clanId: string; myRole: string }) {
       {canManageTeam && <CrossClanSection clanId={clanId} clanName={clan.name} />}
 
       {canManageTeam && adding && <AddTeamMemberDrawer clanId={clanId} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); load(); }} />}
-      {canAddMentees && addingMentees && <AddMenteesDrawer clanId={clanId} clanName={clan.name} onClose={() => setAddingMentees(false)} onChanged={() => load()} />}
+      {canAddMentees && addingMentees && <AddMenteesDrawer clanId={clanId} clanName={clan.name} standing={clan.kind === 'standing'} onClose={() => setAddingMentees(false)} onChanged={() => load()} />}
       {canManageTeam && permMember && <CoMentorPermissionsDrawer clanId={clanId} userId={permMember.user.id} name={name(permMember.user)} onClose={() => setPermMember(null)} onSaved={load} />}
     </div>
   );
@@ -970,16 +977,28 @@ function AddCoverDrawer({ clanId, clanName, onClose, onAdded }: { clanId: string
   );
 }
 
-/** Lead-mentor: pull in people (including mentees of other clans), or invite a new one. */
-function AddMenteesDrawer({ clanId, clanName, onClose, onChanged }: { clanId: string; clanName: string; onClose: () => void; onChanged: () => void }) {
+/** Lead-mentor: pull in people (including mentees of other clans), or invite a new one.
+ *  Standing clans also offer a completed-clan filter with multi-select add. */
+function AddMenteesDrawer({ clanId, clanName, standing = false, onClose, onChanged }: { clanId: string; clanName: string; standing?: boolean; onClose: () => void; onChanged: () => void }) {
+  const { clans } = useClan();
   const [query, setQuery] = useState('');
   const [people, setPeople] = useState<{ id: string; name: string; email: string; role?: string; placedClanId?: string | null; placedClanName?: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviting, setInviting] = useState(false);
+  // Standing only: filter mentees from a completed cohort clan the mentor ran.
+  const [sourceClanId, setSourceClanId] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [alreadyHere, setAlreadyHere] = useState<Set<string>>(new Set());
 
-  const load = useCallback((q: string) => {
+  const completedClans = useMemo(
+    () => clans.filter((c) => c.id !== clanId && c.kind !== 'standing' && c.frozenAt),
+    [clans, clanId],
+  );
+  const fromCompletedClan = standing && Boolean(sourceClanId);
+
+  const loadAvailable = useCallback((q: string) => {
     setLoading(true);
     clanApi.availableMembers(clanId, q || undefined)
       .then((r: any) => setPeople(r.data?.people || []))
@@ -987,20 +1006,105 @@ function AddMenteesDrawer({ clanId, clanName, onClose, onChanged }: { clanId: st
       .finally(() => setLoading(false));
   }, [clanId]);
 
+  // Who is already a mentee here — used to hide them when picking from a completed clan.
   useEffect(() => {
-    const t = setTimeout(() => load(query.trim()), 250);
+    if (!standing) return;
+    clanApi.get(clanId)
+      .then((r: any) => {
+        const memberships: Member[] = r.data?.clan?.memberships || r.data?.memberships || [];
+        setAlreadyHere(new Set(memberships.filter((m) => m.role === 'mentee').map((m) => m.user.id)));
+      })
+      .catch(() => setAlreadyHere(new Set()));
+  }, [standing, clanId]);
+
+  useEffect(() => {
+    if (fromCompletedClan) {
+      setLoading(true);
+      setSelected(new Set());
+      clanApi.get(sourceClanId)
+        .then((r: any) => {
+          const memberships: Member[] = r.data?.clan?.memberships || r.data?.memberships || [];
+          const mentees = memberships
+            .filter((m) => m.role === 'mentee' && !alreadyHere.has(m.user.id))
+            .map((m) => ({
+              id: m.user.id,
+              name: name(m.user),
+              email: m.user.email,
+              role: m.user.role,
+            }));
+          setPeople(mentees);
+        })
+        .catch(() => setPeople([]))
+        .finally(() => setLoading(false));
+      return;
+    }
+    const t = setTimeout(() => loadAvailable(query.trim()), 250);
     return () => clearTimeout(t);
-  }, [query, load]);
+  }, [fromCompletedClan, sourceClanId, alreadyHere, query, loadAvailable]);
+
+  const visiblePeople = useMemo(() => {
+    if (!fromCompletedClan) return people;
+    const q = query.trim().toLowerCase();
+    if (!q) return people;
+    return people.filter((p) => p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q));
+  }, [people, query, fromCompletedClan]);
 
   const add = async (p: { id: string; name: string }) => {
     setBusy(p.id);
     try {
-      await clanApi.addMember(clanId, p.id, 'mentee');
+      if (standing) await completionApi.addMentees(clanId, [p.id]);
+      else await clanApi.addMember(clanId, p.id, 'mentee');
       toast.success(`${p.name} added to ${clanName}`);
       setPeople((prev) => prev.filter((x) => x.id !== p.id));
+      setSelected((prev) => { const n = new Set(prev); n.delete(p.id); return n; });
+      setAlreadyHere((prev) => new Set(prev).add(p.id));
       onChanged();
     } catch (e) { toast.error(extractApiErrorMessage(e, 'Could not add')); }
     finally { setBusy(null); }
+  };
+
+  const addSelected = async () => {
+    const ids = visiblePeople.filter((p) => selected.has(p.id)).map((p) => p.id);
+    if (!ids.length) { toast.error('Select at least one mentee'); return; }
+    setBusy('batch');
+    try {
+      await completionApi.addMentees(clanId, ids);
+      toast.success(`${ids.length} mentee${ids.length === 1 ? '' : 's'} added to ${clanName}`);
+      setPeople((prev) => prev.filter((p) => !ids.includes(p.id)));
+      setSelected(new Set());
+      setAlreadyHere((prev) => {
+        const n = new Set(prev);
+        ids.forEach((id) => n.add(id));
+        return n;
+      });
+      onChanged();
+    } catch (e) { toast.error(extractApiErrorMessage(e, 'Could not add')); }
+    finally { setBusy(null); }
+  };
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  const allVisibleSelected = visiblePeople.length > 0 && visiblePeople.every((p) => selected.has(p.id));
+  const toggleAll = () => {
+    if (allVisibleSelected) {
+      setSelected((prev) => {
+        const n = new Set(prev);
+        visiblePeople.forEach((p) => n.delete(p.id));
+        return n;
+      });
+      return;
+    }
+    setSelected((prev) => {
+      const n = new Set(prev);
+      visiblePeople.forEach((p) => n.add(p.id));
+      return n;
+    });
   };
 
   const invite = async () => {
@@ -1014,9 +1118,25 @@ function AddMenteesDrawer({ clanId, clanName, onClose, onChanged }: { clanId: st
     finally { setInviting(false); }
   };
 
+  const selectedCount = visiblePeople.filter((p) => selected.has(p.id)).length;
+
   return (
     <Drawer open onClose={onClose} title="Add mentees" subtitle={`Bring people into ${clanName}`}
-      footer={<div className="flex justify-end"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm">Close</button></div>}>
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm">Close</button>
+          {fromCompletedClan && (
+            <button
+              onClick={addSelected}
+              disabled={busy === 'batch' || selectedCount === 0}
+              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              {busy === 'batch' ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+              Add{selectedCount ? ` (${selectedCount})` : ''}
+            </button>
+          )}
+        </div>
+      }>
       <div className="space-y-5">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Invite someone new</label>
@@ -1030,35 +1150,85 @@ function AddMenteesDrawer({ clanId, clanName, onClose, onChanged }: { clanId: st
           </div>
           <p className="mt-1 text-xs text-slate-400">They get a magic-link to join this clan as a mentee.</p>
         </div>
+        {standing && <p className="text-sm text-slate-500">You can also add people already in your organization. They keep other memberships and completed-clan work.</p>}
 
-        <div className="pt-4 border-t border-slate-100">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Available people <span className="text-slate-400 font-normal">(including mentees of other clans)</span></label>
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name or email…" className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-card focus:outline-none focus:ring-2 focus:ring-brand-500" />
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          {standing && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">From completed clan</label>
+              <SelectMenu
+                ariaLabel="From completed clan"
+                value={sourceClanId}
+                onChange={(id) => { setSourceClanId(id); setQuery(''); setSelected(new Set()); }}
+                options={[
+                  { value: '', label: 'All available people' },
+                  ...completedClans.map((c) => ({ value: c.id, label: c.name })),
+                ]}
+                placeholder={completedClans.length ? 'All available people' : 'No completed clans yet'}
+                className="w-full"
+              />
+              {!completedClans.length && (
+                <p className="mt-1 text-xs text-slate-400">Completed clans you mentored will appear here after program close.</p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label className="block text-sm font-medium text-slate-700">
+                {fromCompletedClan ? 'Mentees from that clan' : <>Available people <span className="text-slate-400 font-normal">(including mentees of other clans)</span></>}
+              </label>
+              {fromCompletedClan && visiblePeople.length > 0 && (
+                <button type="button" onClick={toggleAll} className="text-xs font-medium text-brand-600 hover:text-brand-700">
+                  {allVisibleSelected ? 'Clear all' : 'Select all'}
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name or email…" className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-card focus:outline-none focus:ring-2 focus:ring-brand-500" />
+            </div>
           </div>
-          <div className="mt-2 max-h-72 overflow-y-auto divide-y divide-slate-100">
+
+          <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
             {loading ? (
               <div className="py-6 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-brand-600" /></div>
-            ) : people.length === 0 ? (
+            ) : visiblePeople.length === 0 ? (
               <p className="py-6 text-center text-sm text-slate-400">No people{query ? ' match your search' : ' to add right now'}.</p>
-            ) : people.map((p) => (
+            ) : visiblePeople.map((p) => (
               <div key={p.id} className="flex items-center justify-between gap-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-900 truncate">
-                    {p.name}
-                    {p.role === 'mentor' && (
-                      <span className="ml-2 align-middle rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Mentor — will also learn here</span>
-                    )}
-                    {p.placedClanId && (
-                      <span className="ml-2 align-middle rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">Also in {p.placedClanName}</span>
-                    )}
-                  </p>
-                  <p className="text-xs text-slate-500 truncate">{p.email}</p>
-                </div>
-                <button onClick={() => add(p)} disabled={busy === p.id} className="px-2.5 py-1.5 rounded-lg bg-brand-50 dark:bg-brand-500/15 text-brand-700 text-xs font-medium hover:bg-brand-100 disabled:opacity-50 inline-flex items-center gap-1.5 shrink-0">
-                  {busy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />} Add
-                </button>
+                {fromCompletedClan ? (
+                  <label className="flex min-w-0 flex-1 items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p.id)}
+                      onChange={() => toggle(p.id)}
+                      className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-900 truncate">{p.name}</p>
+                      <p className="text-xs text-slate-500 truncate">{p.email}</p>
+                    </div>
+                  </label>
+                ) : (
+                  <>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-900 truncate">
+                        {p.name}
+                        {p.role === 'mentor' && (
+                          <span className="ml-2 align-middle rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Mentor — will also learn here</span>
+                        )}
+                        {p.placedClanId && (
+                          <span className="ml-2 align-middle rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">Also in {p.placedClanName}</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-500 truncate">{p.email}</p>
+                    </div>
+                    <button onClick={() => add(p)} disabled={busy === p.id} className="px-2.5 py-1.5 rounded-lg bg-brand-50 dark:bg-brand-500/15 text-brand-700 text-xs font-medium hover:bg-brand-100 disabled:opacity-50 inline-flex items-center gap-1.5 shrink-0">
+                      {busy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />} Add
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>

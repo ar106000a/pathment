@@ -19,6 +19,7 @@
  * that ignore `req.portal` behave exactly as they did.
  */
 const { setRequestPortal } = require('../utils/auditContext');
+const { NotFoundError } = require('../utils/errors/errorTypes');
 
 const PORTAL_ROLES = ['mentee', 'mentor', 'admin'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,9 +71,22 @@ function requestedClanId(req) {
   return parseClanId(fromBody || fromQuery || portalOf(req).clanId);
 }
 
+/**
+ * When a clan is selected, hide entities from other clans (Standee vs completed cohort).
+ * No-op if portal has no clan filter or the entity has no clanId (legacy).
+ */
+function assertMatchesActiveClan(req, entityClanId) {
+  const active = requestedClanId(req);
+  if (!active || !entityClanId) return;
+  if (active !== entityClanId) {
+    throw new NotFoundError('Not found');
+  }
+}
+
 module.exports = portalScope;
 module.exports.portalOf = portalOf;
 module.exports.requestedClanId = requestedClanId;
+module.exports.assertMatchesActiveClan = assertMatchesActiveClan;
 module.exports.PORTAL_ROLES = PORTAL_ROLES;
 
 //Room For improvement: Sanitize the clanId before returning from body/query using parseClanId, 

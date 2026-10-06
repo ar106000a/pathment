@@ -101,7 +101,7 @@ const Avatar = ({ text, url }: { text: string; url?: string | null }) => (
 );
 
 /* ── Comment thread ─────────────────────────────────────────────────────── */
-function Thread({ post, canModerate, people, onChanged }: { post: CommunityPost; canModerate: boolean; people: CommunityPerson[]; onChanged: () => void }) {
+function Thread({ post, canModerate, readOnly, people, onChanged }: { post: CommunityPost; canModerate: boolean; readOnly: boolean; people: CommunityPerson[]; onChanged: () => void }) {
   const [comments, setComments] = useState<CommunityComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState('');
@@ -133,7 +133,7 @@ function Thread({ post, canModerate, people, onChanged }: { post: CommunityPost;
     catch { toast.error('Could not accept'); }
   };
 
-  const canAccept = post.type === 'question' && (post.mine || canModerate);
+  const canAccept = !readOnly && post.type === 'question' && (post.mine || canModerate);
 
   return (
     <div className="mt-3 border-t border-slate-100 pt-3 space-y-3">
@@ -154,16 +154,16 @@ function Thread({ post, canModerate, people, onChanged }: { post: CommunityPost;
                 <p className="text-sm text-slate-700 mt-0.5 whitespace-pre-wrap">{c.body}</p>
               </div>
               <div className="flex items-center gap-3 mt-1 ml-1 text-xs text-slate-400">
-                {!c.parentId && <button onClick={() => setReplyTo(replyTo === c.id ? null : c.id)} className="hover:text-brand-600">Reply</button>}
+                {!readOnly && !c.parentId && <button onClick={() => setReplyTo(replyTo === c.id ? null : c.id)} className="hover:text-brand-600">Reply</button>}
                 {canAccept && !c.accepted && <button onClick={() => accept(c.id)} className="hover:text-emerald-600">Accept answer</button>}
-                {(c.mine || canModerate) && <button onClick={() => remove(c.id)} className="hover:text-red-600">Delete</button>}
+                {!readOnly && (c.mine || canModerate) && <button onClick={() => remove(c.id)} className="hover:text-red-600">Delete</button>}
               </div>
             </div>
           </div>
         ))
       )}
 
-      <div className="space-y-2">
+      {!readOnly && <div className="space-y-2">
         <div className="flex items-center gap-2">
           <input
             value={body}
@@ -177,7 +177,7 @@ function Thread({ post, canModerate, people, onChanged }: { post: CommunityPost;
           </button>
         </div>
         {people.length > 0 && <MentionPicker people={people} value={mentions} onChange={setMentions} />}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -214,7 +214,7 @@ function PostCard({ post, canModerate, hub }: { post: CommunityPost; canModerate
                     <Pin className="w-3.5 h-3.5" />{post.pinned ? 'Unpin' : 'Pin'}
                   </button>
                 )}
-                {(post.mine || canModerate) && (
+                {!hub.active?.readOnly && (post.mine || canModerate) && (
                   <button onClick={() => { hub.deletePost(post.id); setMenu(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10">
                     <Trash2 className="w-3.5 h-3.5" />Delete
                   </button>
@@ -276,18 +276,18 @@ function PostCard({ post, canModerate, hub }: { post: CommunityPost; canModerate
           const on = post.myReactions.includes(r.key);
           const count = post.reactions[r.key] || 0;
           return (
-            <button key={r.key} aria-label={`${r.label}, ${count} reactions`} aria-pressed={on} title={r.label} onClick={() => hub.react(post.id, r.key)}
+            <button key={r.key} disabled={hub.active?.readOnly} aria-label={`${r.label}, ${count} reactions`} aria-pressed={on} title={r.label} onClick={() => hub.react(post.id, r.key)}
               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${on ? r.on : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}>
               <r.icon className="w-3.5 h-3.5" />{count > 0 && count}
             </button>
           );
         })}
         <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200 text-slate-600 hover:border-slate-300 ml-auto">
-          <MessageCircle className="w-3.5 h-3.5" />{post.commentCount > 0 ? post.commentCount : ''} {open ? 'Hide' : 'Reply'}
+          <MessageCircle className="w-3.5 h-3.5" />{post.commentCount > 0 ? post.commentCount : ''} {open ? 'Hide' : hub.active?.readOnly ? 'View replies' : 'Reply'}
         </button>
       </div>
 
-      {open && <Thread post={post} canModerate={canModerate} people={hub.people} onChanged={hub.refetch} />}
+      {open && <Thread post={post} canModerate={canModerate} readOnly={!!hub.active?.readOnly} people={hub.people} onChanged={hub.refetch} />}
     </div>
   );
 }
@@ -415,7 +415,7 @@ function SpaceSwitcher({ hub }: { hub: ReturnType<typeof useCommunityHub> }) {
 export default function CommunityHub({ mentor = false }: { mentor?: boolean }) {
   const hub = useCommunityHub();
   const [showMembers, setShowMembers] = useState(false);
-  const canModerate = Boolean(hub.active?.isModerator);
+  const canModerate = Boolean(hub.active?.isModerator && !hub.active?.readOnly);
 
   if (hub.loadingSpaces) {
     return <div className="flex items-center justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-brand-600" /></div>;
@@ -456,7 +456,7 @@ export default function CommunityHub({ mentor = false }: { mentor?: boolean }) {
             )}
           </div>
 
-          <details className="rounded-2xl border border-border bg-card p-4"><summary className="cursor-pointer flex items-center gap-3 text-sm font-medium text-muted-foreground"><MessagesSquare className="h-5 w-5 text-brand-600" />Share a win, ask a question, or help your clan<span className="ml-auto text-brand-700">Write a post →</span></summary><div className="mt-4"><Composer hub={hub} /></div></details>
+          {hub.active?.readOnly ? <p className="rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">This completed community is read-only. You can continue the conversation in the program community.</p> : <details className="rounded-2xl border border-border bg-card p-4"><summary className="cursor-pointer flex items-center gap-3 text-sm font-medium text-muted-foreground"><MessagesSquare className="h-5 w-5 text-brand-600" />Share a win, ask a question, or help your clan<span className="ml-auto text-brand-700">Write a post →</span></summary><div className="mt-4"><Composer hub={hub} /></div></details>}
 
           {hub.loadingFeed ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 animate-spin text-brand-600" /></div>

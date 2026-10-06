@@ -46,24 +46,31 @@ const importOrg = catchAsync(async (req, res) => {
 
 const assign = catchAsync(async (req, res) => {
   const { menteeId, menteeIds, startStep = 0, dueDate = null, stepIndexes = null, stepOverrides = null } = req.body;
+  const clanId = requestedClanId(req);
   if (Array.isArray(menteeIds) && menteeIds.length) {
-    const results = await linearRoadmapService.bulkAssign(req.user.id, req.params.id, menteeIds, startStep, dueDate, stepIndexes, stepOverrides);
+    const results = await linearRoadmapService.bulkAssign(
+      req.user.id, req.params.id, menteeIds, startStep, dueDate, stepIndexes, stepOverrides, clanId,
+    );
     const assigned = results.filter((r) => r.ok).length;
     return res.status(200).json(successResponse('Roadmap assigned', { results, assigned, failed: results.length - assigned }));
   }
-  const progress = await linearRoadmapService.assignToMentee(req.user.id, req.params.id, menteeId, startStep, null, dueDate, stepIndexes, stepOverrides, requestedClanId(req));
+  const progress = await linearRoadmapService.assignToMentee(
+    req.user.id, req.params.id, menteeId, startStep, null, dueDate, stepIndexes, stepOverrides, clanId,
+  );
   res.status(200).json(successResponse('Roadmap assigned', { progress }));
 });
 
 // Mentee IDs that already have this roadmap (so the UI can disable re-assigning).
 const assignees = catchAsync(async (req, res) => {
-  const menteeIds = await linearRoadmapService.getAssignees(req.params.id);
+  const menteeIds = await linearRoadmapService.getAssignees(req.params.id, requestedClanId(req));
   res.status(200).json(successResponse('Roadmap assignees retrieved', { menteeIds }));
 });
 
 // Per-step assignment status for ONE mentee (multi-select batch assign UI).
 const menteeStepStatus = catchAsync(async (req, res) => {
-  const data = await linearRoadmapService.getMenteeStepStatus(req.params.id, req.params.menteeId);
+  const data = await linearRoadmapService.getMenteeStepStatus(
+    req.params.id, req.params.menteeId, requestedClanId(req),
+  );
   res.status(200).json(successResponse('Mentee step status', data));
 });
 

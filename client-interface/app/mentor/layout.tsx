@@ -7,6 +7,7 @@ import { ActivityTrackerMount } from '@/components/shared/ActivityTrackerMount';
 import { TimezoneSync } from '@/components/shared/TimezoneSync';
 import { WalkthroughMount } from '@/components/onboarding/WalkthroughMount';
 import { ChangelogMount } from '@/components/shared/ChangelogMount';
+import { ClanWorkspaceNotice } from '@/components/shared/ClanWorkspaceNotice';
 
 export default function MentorLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -19,7 +20,7 @@ export default function MentorLayout({ children }: { children: React.ReactNode }
           <ChangelogMount role="mentor" />
           <Navigation role="mentor" />
           <main className="lg:pl-64 pt-14 lg:pt-0">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"><MentorWorkspaceTabs />{children}</div>
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"><MentorWorkspaceTabs /><ClanWorkspaceNotice role="mentor" />{children}</div>
           </main>
         </div>
       </OnboardingGuard>

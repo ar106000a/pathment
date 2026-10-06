@@ -53,6 +53,7 @@ interface Props {
   onClose: () => void;
   clans: ClanLite[];
   defaultClanId: string | null;
+  readOnly?: boolean;
 }
 
 /**
@@ -61,7 +62,7 @@ interface Props {
  * occurrence as a session (room auto-opens at the time) and emails everyone a
  * timezone-correct invite + reminders with a calendar attachment.
  */
-export function ReviewScheduleDrawer({ open, onClose, clans, defaultClanId }: Props) {
+export function ReviewScheduleDrawer({ open, onClose, clans, defaultClanId, readOnly = false }: Props) {
   const confirm = useConfirm();
   const [loading, setLoading] = useState(true);
   const [schedules, setSchedules] = useState<ReviewSchedule[]>([]);
@@ -166,7 +167,8 @@ export function ReviewScheduleDrawer({ open, onClose, clans, defaultClanId }: Pr
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm hover:bg-slate-50">Close</button>
           <button
             onClick={submit}
-            disabled={creating}
+            disabled={creating || readOnly}
+            title={readOnly ? 'Completed programs are read-only' : undefined}
             className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-60 inline-flex items-center gap-1.5"
           >
             {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
@@ -199,9 +201,9 @@ export function ReviewScheduleDrawer({ open, onClose, clans, defaultClanId }: Pr
                   </div>
                   <button
                     onClick={() => cancel(s)}
-                    disabled={busyId === s.id}
+                    disabled={busyId === s.id || readOnly}
                     className="shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    title="Cancel this recurring review"
+                    title={readOnly ? 'Completed programs are read-only' : 'Cancel this recurring review'}
                   >
                     {busyId === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   </button>

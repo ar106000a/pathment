@@ -37,11 +37,13 @@ export function SubmitTaskDrawer({
   task,
   onClose,
   onSubmitted,
+  readOnly = false,
 }: {
   open: boolean;
   task: SubmitTaskTarget | null;
   onClose: () => void;
   onSubmitted?: () => void;
+  readOnly?: boolean;
 }) {
   const [description, setDescription] = useState('');
   const [links, setLinks] = useState<string[]>(['']);
@@ -61,7 +63,7 @@ export function SubmitTaskDrawer({
   const isResubmit = task?.status === 'revision_needed';
 
   const submit = async () => {
-    if (!task) return;
+    if (!task || readOnly) return;
     if (!canSubmit) { toast.error('Add a note, a link, or a file before submitting'); return; }
     try {
       setSaving(true);
@@ -95,7 +97,7 @@ export function SubmitTaskDrawer({
       footer={
         <>
           <button onClick={onClose} className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50">Cancel</button>
-          <button onClick={submit} disabled={saving || !canSubmit} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50">
+          <button onClick={submit} disabled={saving || !canSubmit || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}{isResubmit ? 'Re-submit' : 'Submit'}
           </button>
         </>

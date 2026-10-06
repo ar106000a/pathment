@@ -22,6 +22,7 @@ import {
 import { meetingsApi } from "@/lib/services/meetings-api";
 import { Drawer } from "@/components/shared/Drawer";
 import { formatMeeting } from "@/lib/utils/datetime";
+import { useClan, isHistoricalCohortClan } from "@/lib/context/ClanContext";
 
 const initialsOf = (name: string) =>
   name
@@ -39,6 +40,11 @@ const STATUS_CLASS: Record<string, string> = {
 
 export default function MenteeMeetings() {
   const { bookable, meetings, loading, error, refetch } = useMenteeMeetings();
+  const { menteeClans, menteeActiveClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    menteeClans.find((c) => c.id === menteeActiveClanId),
+  );
+  const HISTORICAL_TITLE = "Completed programs are read-only";
   const [booking, setBooking] = useState<OpenSlot | null>(null);
   const [bookingMentor, setBookingMentor] = useState("");
   const [agenda, setAgenda] = useState("");
@@ -154,7 +160,8 @@ export default function MenteeMeetings() {
                               onClick={() =>
                                 setOpenPicker(open ? null : b.mentor.id)
                               }
-                              disabled={b.slots.length === 0}
+                              disabled={b.slots.length === 0 || historical}
+                              title={historical ? HISTORICAL_TITLE : undefined}
                               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50"
                             >
                               <CalendarPlus className="w-4 h-4" />
@@ -243,9 +250,9 @@ export default function MenteeMeetings() {
                       </div>
                       <button
                         onClick={() => setCancelFor(m)}
-                        disabled={busyId === m.id}
-                        title="Cancel"
-                        className="p-1.5 -m-1 text-slate-300 hover:text-red-500 shrink-0"
+                        disabled={busyId === m.id || historical}
+                        title={historical ? HISTORICAL_TITLE : "Cancel"}
+                        className="p-1.5 -m-1 text-slate-300 hover:text-red-500 shrink-0 disabled:opacity-50"
                       >
                         {busyId === m.id ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -348,7 +355,8 @@ export default function MenteeMeetings() {
             </button>
             <button
               onClick={confirmBook}
-              disabled={saving}
+              disabled={saving || historical}
+              title={historical ? HISTORICAL_TITLE : undefined}
               className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm inline-flex items-center gap-2 disabled:opacity-50"
             >
               {saving ? (
@@ -400,7 +408,8 @@ export default function MenteeMeetings() {
             </button>
             <button
               onClick={confirmCancel}
-              disabled={busyId === cancelFor?.id}
+              disabled={busyId === cancelFor?.id || historical}
+              title={historical ? HISTORICAL_TITLE : undefined}
               className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm inline-flex items-center gap-2 disabled:opacity-50"
             >
               {busyId === cancelFor?.id ? (

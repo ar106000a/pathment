@@ -21,6 +21,7 @@ import Link from 'next/link';
 import { Mic, ListChecks, Code2, CalendarRange, ChevronDown } from 'lucide-react';
 import { OpenSourceOrgPicker } from '@/components/shared/OpenSourceOrgPicker';
 import type { OpenSourceOrg } from '@/lib/services/open-source-orgs-api';
+import { useClan, ALL_CLANS, isHistoricalCohortClan } from '@/lib/context/ClanContext';
 
 type AssignSource = 'custom' | 'roadmap';
 
@@ -58,6 +59,10 @@ export function AssignTaskDrawer({
   onClose: () => void;
   onAssigned?: () => void;
 }) {
+  const { clans, activeClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    activeClanId === ALL_CLANS ? null : clans.find((c) => c.id === activeClanId),
+  );
   const [source, setSource] = useState<AssignSource>('custom');
 
   // roadmap mode
@@ -314,11 +319,20 @@ export function AssignTaskDrawer({
   const targetCount = targetIds.length;
   const blockedCount = rawTargetIds.length - targetCount;
   // Single-mode roadmap where the one mentee already has this roadmap.
-  const canSubmit = targetCount > 0 && (source === 'custom'
+  const canSubmit = !historical && targetCount > 0 && (source === 'custom'
     ? (!!title.trim() && (type !== 'interview' || !!kitId) && (type !== 'quiz' || !!quizKitId) && (schedule.mode === 'now' || (!!schedule.startsOn && !!schedule.timeLocal && schedule.dueOffsetDays > 0 && (schedule.mode !== 'weekly' || schedule.daysOfWeek.length > 0))))
     : (!!roadmapId && selectedSteps.size > 0));
 
   const submit = async () => {
+    if (historical) {
+      toast.error('This cohort is historical. An admin must reopen the program before assigning tasks.');
+      return;
+    }
+    // Multi-clan mentors must pick Standee vs cohort so work never lands on the wrong side.
+    if (activeClanId === ALL_CLANS && clans.length > 1) {
+      toast.error('Select a clan in the sidebar before assigning work.');
+      return;
+    }
     if (!canSubmit || saving) return;
     try {
       setSaving(true);

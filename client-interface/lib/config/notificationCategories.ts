@@ -39,6 +39,7 @@ export const EMAIL_PREFERENCE_CATEGORIES: EmailCategory[] = [
   { group: 'Program', key: 'mentee_transfer_decided', label: 'A mentee move is accepted or declined', roles: ['mentor', 'mentee'] },
   { group: 'Program', key: 'mentee_returned', label: 'A paused mentee returns to your clan', roles: ['mentor'] },
   { group: 'Program', key: 'promotion_nominated', label: 'A mentee is nominated for promotion', roles: ['admin', 'mentor'] },
+  { group: 'Program', key: 'standing_clan_request_created', label: 'A mentor requests a standing clan', roles: ['admin'] },
   { group: 'Program', key: 'mentee_reengage', label: "Reminders to come back when you're paused", roles: ['mentee'] },
   { group: 'Program', key: 'feedback_status_updated', label: 'Updates on your feedback or bug reports', roles: ['mentee', 'mentor', 'admin'] },
   // Milestones

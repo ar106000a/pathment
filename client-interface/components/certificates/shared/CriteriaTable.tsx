@@ -18,6 +18,7 @@ interface TierCriteria {
   minAvgRating?: number | null;
   minAttendanceRate?: number | null;
   customRule?: string | null;
+  reviewChecklist?: string[];
 }
 
 interface CriteriaTableProps {
@@ -118,6 +119,7 @@ export function CriteriaTable({ criteria, onAdd, onEdit, onDelete, onReorder }: 
             if (tier.minOnTimeRate != null)          parts.push(`On-Time ≥${tier.minOnTimeRate}%`);
             if (tier.minAvgRating != null)           parts.push(`Rating ≥${tier.minAvgRating}`);
             if (tier.minAttendanceRate != null)      parts.push(`Attendance ≥${tier.minAttendanceRate}%`);
+            if (tier.reviewChecklist?.length)        parts.push(`${tier.reviewChecklist.length} review check${tier.reviewChecklist.length === 1 ? '' : 's'}`);
 
             const summaryText = parts.length > 0
               ? parts.join(' · ')

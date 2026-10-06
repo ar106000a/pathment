@@ -41,10 +41,12 @@ export function InterviewReviewDrawer({
   taskId,
   onClose,
   onFinalized,
+  readOnly = false,
 }: {
   taskId: string;
   onClose: () => void;
   onFinalized?: () => void;
+  readOnly?: boolean;
 }) {
   const confirm = useConfirm();
   const [loading, setLoading] = useState(true);
@@ -98,7 +100,7 @@ export function InterviewReviewDrawer({
     return () => window.removeEventListener('keydown', onKey);
   }, [zoom, review]);
 
-  const canReview = !!review?.canReview;
+  const canReview = !!review?.canReview && !readOnly;
 
   const saveScore = async (it: ReviewItem, patch: { points?: string; note?: string }) => {
     const cur = scores[it.questionId] || { points: '', note: '' };

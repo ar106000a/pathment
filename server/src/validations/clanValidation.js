@@ -61,5 +61,22 @@ module.exports = {
 
   publicJoinRequestBody: Joi.object({
     message: Joi.string().trim().max(2000).allow('', null).optional()
+  }),
+
+  standingMembersBody: Joi.object({
+    menteeIds: Joi.array()
+      .items(Joi.string().uuid())
+      .min(1)
+      .max(100)
+      .required()
+      .messages({
+        'array.min': 'Select between 1 and 100 mentees',
+        'array.max': 'Select between 1 and 100 mentees',
+        'any.required': 'Select between 1 and 100 mentees'
+      })
+  }),
+
+  standingActivityQuery: Joi.object({
+    period: Joi.string().valid('30d', 'quarter', 'joined').default('30d')
   })
 };

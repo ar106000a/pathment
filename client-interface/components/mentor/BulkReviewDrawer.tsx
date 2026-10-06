@@ -27,11 +27,13 @@ export function BulkReviewDrawer({
   onClose,
   onReviewed,
   onSubmit,
+  readOnly = false,
 }: {
   items: ApprovalItem[];
   onClose: () => void;
   onReviewed: (count: number) => void;
   onSubmit: (submissionIds: string[], payload: BulkReviewPayload) => Promise<void>;
+  readOnly?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>('approve');
   const [rating, setRating] = useState(5);
@@ -57,6 +59,7 @@ export function BulkReviewDrawer({
   const count = items.length;
 
   const submit = async () => {
+    if (readOnly) return;
     if (mode === 'changes' && !feedback.trim()) {
       toast.error('Add feedback before requesting changes');
       return;
@@ -99,7 +102,8 @@ export function BulkReviewDrawer({
           </button>
           <button
             onClick={submit}
-            disabled={busy || (mode === 'changes' && !feedback.trim())}
+            disabled={busy || readOnly || (mode === 'changes' && !feedback.trim())}
+            title={readOnly ? 'Completed programs are read-only' : undefined}
             className={`inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-50 transition-colors ${
               mode === 'approve' ? 'bg-brand-600 hover:bg-brand-700' : 'bg-amber-600 hover:bg-amber-700'
             }`}

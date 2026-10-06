@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const programController = require('../controllers/programController');
 const { authenticate, authorize, optionalAuth } = require('../middlewares/auth');
-const { validate } = require('../middlewares/validate');
+const { validate, validateBody, validateParams } = require('../middlewares/validate');
 const programValidation = require('../validations/programValidation');
 
 /**
@@ -15,6 +15,56 @@ router.get(
   optionalAuth,
   validate(programValidation.getProgramsFilters, 'query'),
   programController.getPrograms
+);
+
+/**
+ * @route   GET /api/programs/:id/completion
+ * @desc    Preview formal program close (certificate notices, canClose)
+ * @access  Admin
+ */
+router.get(
+  '/:id/completion',
+  authenticate,
+  validateParams(programValidation.idParams),
+  programController.previewCompletion
+);
+
+/**
+ * @route   POST /api/programs/:id/close
+ * @desc    Formally close a program
+ * @access  Admin
+ */
+router.post(
+  '/:id/close',
+  authenticate,
+  validateParams(programValidation.idParams),
+  validateBody(programValidation.closeProgram),
+  programController.closeProgram
+);
+
+/**
+ * @route   POST /api/programs/:id/reopen
+ * @desc    Reopen a formally closed program for corrections
+ * @access  Admin
+ */
+router.post(
+  '/:id/reopen',
+  authenticate,
+  validateParams(programValidation.idParams),
+  validateBody(programValidation.reopenProgram),
+  programController.reopenProgram
+);
+
+/**
+ * @route   GET /api/programs/:id/results
+ * @desc    Final results for a closed program
+ * @access  Admin, Mentor, Mentee (scoped in service)
+ */
+router.get(
+  '/:id/results',
+  authenticate,
+  validateParams(programValidation.idParams),
+  programController.getFinalResults
 );
 
 /**

@@ -10,10 +10,6 @@
  * AI evaluation they kicked off graded the whole organisation: the progress bar
  * read "0 / 623" for someone responsible for a dozen people.
  *
- * The same mistake, in the other direction, meant the delete and revoke guards
- * (`if (user.role === 'mentor')`) never matched for that person and were
- * skipped entirely.
- *
  * Scope is derived from the permission they actually hold at a clan now, and
  * the default is CLOSED: no clans means no mentees, never everybody.
  */
@@ -116,6 +112,15 @@ describe('certificate scope for mentors and co-mentors', () => {
       const res = await certificateService.runAIEvaluation(template.id, null, admin);
       expect(res.total).toBeGreaterThanOrEqual(2);
     });
+
+    it('queues only the admin-selected mentees and ignores out-of-scope ids', async () => {
+      const res = await certificateService.runAIEvaluation(template.id, null, admin, {
+        menteeIds: [myMentee.id, 'not-a-real-or-scoped-user']
+      });
+      expect(res.total).toBe(1);
+      const queued = await models.AIEvaluationQueue.findAll({ where: { runId: res.runId }, raw: true });
+      expect(queued.map((row) => row.menteeId)).toEqual([myMentee.id]);
+    });
   });
 
   describe('issuing', () => {
@@ -160,19 +165,24 @@ describe('certificate scope for mentors and co-mentors', () => {
       });
     });
 
-    it('refuses a mentor another clan\'s certificate', async () => {
+    it('refuses a lead mentor because revocation is an admin action', async () => {
       await expect(certificateService.deleteCertificateInstance(otherInstance.id, lead))
-        .rejects.toThrow(/only revoke certificates for mentees in your clan/i);
+        .rejects.toThrow(/only an admin can revoke/i);
     });
 
-    it('refuses a promoted co-mentor, whose guard used to be skipped entirely', async () => {
+    it('refuses a promoted co-mentor too', async () => {
       await expect(certificateService.deleteCertificateInstance(otherInstance.id, promotedCoMentor))
-        .rejects.toThrow(/only revoke/i);
+        .rejects.toThrow(/only an admin can revoke/i);
       expect(await models.CertificateInstance.findByPk(otherInstance.id)).not.toBeNull();
     });
 
-    it('lets the outsider who owns that clan revoke it', async () => {
-      await expect(certificateService.deleteCertificateInstance(otherInstance.id, outsider)).resolves.toBe(true);
+    it('does not let a lead mentor revoke even within their own clan', async () => {
+      await expect(certificateService.deleteCertificateInstance(otherInstance.id, outsider))
+        .rejects.toThrow(/only an admin can revoke/i);
+    });
+
+    it('lets an admin revoke it', async () => {
+      await expect(certificateService.deleteCertificateInstance(otherInstance.id, admin)).resolves.toBe(true);
     });
   });
 

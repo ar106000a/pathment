@@ -23,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     enrollmentId: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true,
       field: 'enrollment_id'
     },
     status: {

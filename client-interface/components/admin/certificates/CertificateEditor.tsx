@@ -1,7 +1,7 @@
 'use client';
 
 import { useConfirm } from '@/lib/context/ConfirmContext';
-import { NO_CERTIFICATE, reviewSelection, aiSelection } from '@/lib/utils/certificate-decision';
+import { NO_CERTIFICATE, reviewSelection, aiSelection, decisionPayload } from '@/lib/utils/certificate-decision';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -21,7 +21,7 @@ import { extractApiErrorMessage } from '@/lib/utils/api-error';
 import { orgRoadmapApi } from '@/lib/services/roadmap-api';
 import { programsApi } from '@/lib/services/program-api';
 import { getTierButtonColor, getTierIconColor } from '@/lib/utils/certificates';
-import { MenteeEvidenceDrawer, CertificateReviewDrawer, AIEvaluationBanner, CriteriaTable, RecipientRosterTable, VerificationBanner, RosterFilterBar, type CertificateReviewMode } from '@/components/certificates/shared';
+import { MenteeEvidenceDrawer, AIEvaluationBanner, CriteriaTable, RecipientRosterTable, VerificationBanner, RosterFilterBar, type CertificateReviewMode } from '@/components/certificates/shared';
 import { SelectMenu } from '@/components/shared/SelectMenu';
 import CertificateHistoryLog from './CertificateHistoryLog';
 import {
@@ -67,6 +67,8 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
   const [isPresetsDrawerOpen, setIsPresetsDrawerOpen] = useState(false);
   const [isPreviewGalleryOpen, setIsPreviewGalleryOpen] = useState(false);
   const [isSendDrawerOpen, setIsSendDrawerOpen] = useState(false);
+  const [sendTargetMenteeIds, setSendTargetMenteeIds] = useState<string[] | null>(null);
+  const [aiTargetMenteeIds, setAiTargetMenteeIds] = useState<string[] | null>(null);
   const [logoUrl, setLogoUrl] = useState('');
   const [logoConfig, setLogoConfig] = useState({ xPercent: 50, yPercent: 20, widthPercent: 12 });
 
@@ -95,7 +97,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
   const [expandedAIRows, setExpandedAIRows] = useState<Set<string>>(new Set());
 
   const {
-    aiResults, setAiResults, aiRanAt, setAiRanAt, runningAI, failedCount,
+    aiResults, setAiResults, aiRanAt, setAiRanAt, runningAI, failedCount, skippedCount,
     aiProgressCount, aiTotalCount, aiEvalMap, runAIEvaluation
   } = useAIEvaluationProgress({
     templateId,
@@ -132,21 +134,24 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
   const [reviewRows, setReviewRows] = useState<Record<string, CertificateVerification>>({});
   const [clanStates, setClanStates] = useState<ReviewerClanState[]>([]);
   const [reviewLoadError, setReviewLoadError] = useState<string | null>(null);
-  const [reviewDrawer, setReviewDrawer] = useState<{
-    clanId: string | null;
-    clanName: string;
-    mode: CertificateReviewMode;
-  } | null>(null);
-  const reviewDrawerRows = useMemo(() => {
-    if (!reviewDrawer) return [];
-    return Object.values(reviewRows).filter((row) => {
-      if ((row.clanId ?? null) !== reviewDrawer.clanId) return false;
-      if (reviewDrawer.mode === 'changed') return row.overridden;
-      if (reviewDrawer.mode === 'pending') return row.status === 'pending';
-      return true;
-    });
-  }, [reviewDrawer, reviewRows]);
   const inspectedIndex = inspectionQueue.indexOf(inspectedRecipient?.mentee_id);
+
+  const openReviewQueue = useCallback((clanId: string | null, _clanName: string, mode: CertificateReviewMode) => {
+    const rows = Object.values(reviewRows)
+      .filter((row) => (row.clanId ?? null) === clanId)
+      .filter((row) => mode === 'changed' ? (row.overridden || row.hasChangeRequest) : mode === 'pending' ? row.status === 'pending' : true)
+      .sort((a, b) => {
+        const rank = (row: CertificateVerification) => row.hasChangeRequest ? 0 : row.status === 'pending' ? 1 : row.stage === 'mentor_verified' ? 2 : 3;
+        return rank(a) - rank(b);
+      });
+    if (!rows.length) {
+      toast.info('There are no matching certificate claims to review.');
+      return;
+    }
+    const queue = rows.map((row) => row.menteeId);
+    setInspectionQueue(queue);
+    setInspectedRecipient({ mentee_id: queue[0] });
+  }, [reviewRows]);
 
   const {
     recipientSearch, setRecipientSearch,
@@ -212,6 +217,11 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
   const activeClanName = clanFilter === 'all'
     ? null
     : rosterClans.find(c => c.id === clanFilter)?.name ?? null;
+  const selectedVisibleMenteeIds = useMemo(
+    () => recipientType === 'mentees' ? Array.from(issuableMenteeIds) : [],
+    [issuableMenteeIds, recipientType]
+  );
+  const selectedWithoutAI = selectedVisibleMenteeIds.filter((id) => !aiEvalMap[id]).length;
 
   const loadReviewRound = useCallback(async () => {
     if (!templateId) {
@@ -330,7 +340,8 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
               minOnTimeRate:     c.minOnTimeRate ?? null,
               minAvgRating:      c.minAvgRating ?? null,
               minAttendanceRate: c.minAttendanceRate ?? null,
-              customRule:        c.customRule ?? ''
+              customRule:        c.customRule ?? '',
+              reviewChecklist:   Array.isArray(c.reviewChecklist) ? c.reviewChecklist : []
             }));
             loaded.sort((a: any, b: any) => (a.priority ?? Infinity) - (b.priority ?? Infinity));
             setCriteria(loaded);
@@ -680,7 +691,11 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
       setIssuing(true);
       const res = await certificatesApi.issueCertificates({
         templateId: templateId!,
-        recipients: recipientsList
+        recipients: recipientsList,
+        // This page is the admin portal. The confirmation in handleIssue makes
+        // the bypass deliberate; the server still verifies the caller is an
+        // admin before honoring it.
+        adminOverrideReview: true
       });
       if (res.success) {
         toast.success(`Sent ${res.data?.count ?? 0} certificate(s). ${res.data?.skippedNoCertificate ?? 0} marked No certificate; ${(res.data?.skipped ?? 0) - (res.data?.skippedNoCertificate ?? 0)} already issued.`);
@@ -719,8 +734,19 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
       toast.error('Save No certificate decisions in the evidence drawer before issuing.');
       return;
     }
-    const excludedCount = recipients.filter(r => reviewRows[r.menteeId]?.decision === 'no_certificate').length;
+    // The admin's visible selection is authoritative on this screen. Counting
+    // the stale review decision here is what produced “1 marked No certificate”
+    // even after the dropdown visibly showed Participation Certificate.
+    const excludedCount = recipients.filter(r => r.tier === NO_CERTIFICATE).length;
     if (excludedCount && !(await confirm({ title: 'Confirm certificate recipients', description: `${recipients.length - excludedCount} selected for certificates; ${excludedCount} marked No certificate will be excluded. Already-issued certificates are skipped automatically.` }))) return;
+    const bypassedReviewCount = recipients.filter(({ menteeId, tier }) => {
+      const review = reviewRows[menteeId];
+      return tier !== NO_CERTIFICATE && (review?.status !== 'verified' || reviewSelection(review) !== tier);
+    }).length;
+    if (bypassedReviewCount && !(await confirm({
+      title: 'Issue as admin without mentor verification?',
+      description: `${bypassedReviewCount} selected certificate${bypassedReviewCount === 1 ? ' has' : 's have'} not been mentor-verified with the badge currently selected. Admin issuance will use your selected badge immediately and bypass mentor verification. This action is recorded in the certificate history.`
+    }))) return;
     const allMentees: any[] = [];
     const seenIds = new Set<string>();
     Object.keys(qualifiedData).forEach(key => {
@@ -768,10 +794,19 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
     if (!templateId) return;
     try {
       setSendingToMentors(true);
-      const res = await certificatesApi.sendToClans(templateId, { deadline });
+      const res = await certificatesApi.sendToClans(templateId, {
+        deadline,
+        menteeIds: sendTargetMenteeIds ?? undefined,
+        assignments: sendTargetMenteeIds?.map((menteeId) => ({
+          menteeId,
+          ...decisionPayload(adminTiers[menteeId] ?? getEffectiveTier(menteeId)),
+          reason: 'Assigned by an admin before mentor review'
+        }))
+      });
       if (res.success) {
         toast.success(res.message);
         setIsSendDrawerOpen(false);
+        setSendTargetMenteeIds(null);
         setRefreshKey(prev => prev + 1);   // refresh the verification banner
       }
     } catch (err) {
@@ -802,8 +837,31 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
     });
   };
 
-  const handleRunAIEvaluation = () => {
-    if (templateId) runAIEvaluation(templateId);
+  const handleRunAIEvaluation = (menteeIds: string[] | null = null) => {
+    if (!templateId) return;
+    if (!criteria.length) {
+      toast.error('Add at least one certificate type and its criteria before evaluating.');
+      return;
+    }
+    setAiTargetMenteeIds(menteeIds);
+    setIsRulesDrawerOpen(true);
+  };
+
+  const startAIEvaluationFromRules = async () => {
+    if (!templateId) return;
+    try {
+      // The evaluator must use exactly what the admin is looking at. Persist
+      // any in-editor criteria changes first so it cannot grade against an old
+      // custom rule still stored on the template.
+      const committed = commitActiveTier(criteria);
+      await certificatesApi.updateTemplate(templateId, { criteria: committed });
+      setCriteria(committed);
+      setIsRulesDrawerOpen(false);
+      await runAIEvaluation(templateId, aiTargetMenteeIds ?? undefined);
+      setAiTargetMenteeIds(null);
+    } catch (error) {
+      toast.error(extractApiErrorMessage(error, 'Could not save the criteria and start evaluation'));
+    }
   };
 
   /**
@@ -1510,9 +1568,13 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
       {}
       <SendToClansDrawer
         open={isSendDrawerOpen}
-        onClose={() => setIsSendDrawerOpen(false)}
+        onClose={() => {
+          setIsSendDrawerOpen(false);
+          setSendTargetMenteeIds(null);
+        }}
         sending={sendingToMentors}
         onSend={handleSendToClans}
+        selectedCount={sendTargetMenteeIds?.length ?? null}
       />
 
       <TierPreviewGallery
@@ -1544,7 +1606,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleRunAIEvaluation}
+              onClick={() => handleRunAIEvaluation()}
               disabled={runningAI || !templateId}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-xs"
             >
@@ -1557,7 +1619,10 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
             {templateId && selectedProgramId && (
               <button
                 type="button"
-                onClick={() => setIsSendDrawerOpen(true)}
+                onClick={() => {
+                  setSendTargetMenteeIds(null);
+                  setIsSendDrawerOpen(true);
+                }}
                 disabled={sendingToMentors || !aiRanAt}
                 title={aiRanAt ? undefined : 'Run the AI evaluation first'}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-brand-500/10 hover:bg-brand-500/20 text-brand-600 rounded-xl text-xs font-bold transition-colors disabled:opacity-50"
@@ -1579,7 +1644,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
             onIssueAnyway={() => {
               document.getElementById('certificate-recipients')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            onViewClan={(clanId, clanName, mode) => setReviewDrawer({ clanId, clanName, mode })}
+            onViewClan={openReviewQueue}
           />
         )}
 
@@ -1593,6 +1658,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
 
             <AIEvaluationBanner
                   failedCount={failedCount}
+              skippedCount={skippedCount}
               count={aiResults.length}
               ranAt={aiRanAt}
               runningAI={runningAI}
@@ -1618,21 +1684,6 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
                   ? () => setInspectedRecipient({ mentee_id: inspectionQueue[inspectedIndex + 1] })
                   : undefined,
               } : undefined}
-            />
-
-            <CertificateReviewDrawer
-              open={Boolean(reviewDrawer)}
-              clanId={reviewDrawer?.clanId ?? null}
-              clanName={reviewDrawer?.clanName ?? 'Review decisions'}
-              mode={reviewDrawer?.mode ?? 'all'}
-              rows={Object.values(reviewRows)}
-              tierName={getTierName}
-              onClose={() => setReviewDrawer(null)}
-              onInspect={(menteeId) => {
-                setInspectionQueue(reviewDrawerRows.map((row) => row.menteeId));
-                setReviewDrawer(null);
-                setInspectedRecipient({ mentee_id: menteeId });
-              }}
             />
 
             {}
@@ -1800,18 +1851,43 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
                   </span>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={handleIssue}
-                disabled={issuing || issuableMenteeIds.size === 0 || selectedSummary[NO_CERTIFICATE] === issuableMenteeIds.size}
-                className="flex items-center gap-1.5 px-6 py-3 bg-brand-600 hover:bg-brand-700 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm shadow-sm transition-all"
-              >
-                {issuing ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : <Award className="w-3.5 h-3.5" />}
-                {/* Naming the clan matters when one is selected: issuing is
-                    irreversible and the admin should see the scope of what
-                    they are about to send, not a generic label. */}
-                {activeClanName ? `Issue to ${activeClanName}` : 'Issue Certificates'}
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {recipientType === 'mentees' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleRunAIEvaluation(selectedVisibleMenteeIds)}
+                      disabled={runningAI || selectedVisibleMenteeIds.length === 0}
+                      className="flex items-center gap-1.5 rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-xs font-bold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-300"
+                    >
+                      {runningAI ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                      Evaluate selected ({selectedVisibleMenteeIds.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSendTargetMenteeIds(selectedVisibleMenteeIds);
+                        setIsSendDrawerOpen(true);
+                      }}
+                      disabled={sendingToMentors || selectedVisibleMenteeIds.length === 0 || selectedWithoutAI > 0}
+                      title={selectedWithoutAI > 0 ? `Evaluate ${selectedWithoutAI} selected mentee(s) first` : undefined}
+                      className="flex items-center gap-1.5 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-xs font-bold text-brand-700 transition-colors hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      Send selected for review ({selectedVisibleMenteeIds.length})
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={handleIssue}
+                  disabled={issuing || issuableMenteeIds.size === 0 || selectedSummary[NO_CERTIFICATE] === issuableMenteeIds.size}
+                  className="flex items-center gap-1.5 px-6 py-3 bg-brand-600 hover:bg-brand-700 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm shadow-sm transition-all"
+                >
+                  {issuing ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : <Award className="w-3.5 h-3.5" />}
+                  {activeClanName ? `Issue to ${activeClanName}` : 'Issue Certificates'}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1838,15 +1914,32 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
       />
       <Drawer
         open={isRulesDrawerOpen}
-        onClose={() => setIsRulesDrawerOpen(false)}
+        onClose={() => {
+          setIsRulesDrawerOpen(false);
+          setAiTargetMenteeIds(null);
+        }}
         title="Certificate Criteria & Rules"
         subtitle={`Requirements configured for the template: ${name || 'New Template'}`}
         width="md"
+        footer={templateId ? (
+          <button type="button" onClick={startAIEvaluationFromRules} disabled={runningAI || criteria.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50">
+            {runningAI ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {aiTargetMenteeIds
+              ? `Evaluate selected (${aiTargetMenteeIds.length})`
+              : 'Evaluate unreviewed mentees'}
+          </button>
+        ) : undefined}
       >
         <div className="space-y-6">
           <p className="text-xs text-muted-foreground leading-relaxed">
             The rules below define the AI evaluation criteria for each tier. The AI uses these keywords and scoring thresholds to determine which certificate each mentee qualifies for.
           </p>
+
+          <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 text-xs leading-relaxed text-foreground">
+            <p className="font-bold">Evaluation summary</p>
+            <p className="mt-1 text-muted-foreground">Types are checked from highest to lowest priority. Every hard threshold, required keyword, custom AI rule, and optional admin checklist item must pass. Qualitative checks require proof from completed work, approved submission details, or mentor feedback.</p>
+            <p className="mt-2 font-medium text-violet-700 dark:text-violet-300">Human decisions are protected: signed-off, admin-approved, and already-issued certificates are skipped.</p>
+          </div>
 
           <div className="space-y-4">
             {criteria.map((c: any) => {
@@ -1859,6 +1952,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
               const minOnTime = c.minOnTimeRate ?? 0;
               const minRating = c.minAvgRating ?? 0;
               const customRule = c.customRule?.trim() ?? '';
+              const reviewChecklist: string[] = c.reviewChecklist || [];
 
               return (
                 <div key={c.id} className="p-4 rounded-2xl border border-border bg-card shadow-2xs space-y-3">
@@ -1868,7 +1962,7 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
                   </div>
 
                   <div className="space-y-3">
-                    {isParticipation && kws.length === 0 && minScore === 0 ? (
+                    {isParticipation && kws.length === 0 && minScore === 0 && reviewChecklist.length === 0 ? (
                       <p className="text-xs text-muted-foreground font-semibold italic">
                         Awarded to all active participants (no minimum requirements).
                       </p>
@@ -1920,6 +2014,14 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
                           <div className="space-y-1">
                             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Custom AI Rule</p>
                             <p className="text-[11px] text-foreground italic bg-muted/30 rounded-xl px-3 py-2 leading-relaxed">"{customRule}"</p>
+                          </div>
+                        )}
+                        {reviewChecklist.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Mentor &amp; AI checklist</p>
+                            <div className="space-y-1">
+                              {reviewChecklist.map((item) => <p key={item} className="rounded-lg bg-muted/30 px-3 py-2 text-[11px] text-foreground">✓ {item}</p>)}
+                            </div>
                           </div>
                         )}
                       </>
@@ -2143,22 +2245,26 @@ export default function CertificateEditor({ templateId }: CertificateEditorProps
  * leaving a round hanging silently.
  */
 function SendToClansDrawer({
-  open, onClose, sending, onSend,
+  open, onClose, sending, onSend, selectedCount,
 }: {
   open: boolean;
   onClose: () => void;
   sending: boolean;
   onSend: (deadlineIso: string) => void;
+  selectedCount: number | null;
 }) {
   const [days, setDays] = useState(7);
-  const due = new Date(Date.now() + days * 86_400_000);
+  const [openedAt] = useState(() => Date.now());
+  const due = new Date(openedAt + days * 86_400_000);
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
-      title="Send grades to clans"
-      subtitle="Mentors review the AI's grades for their own mentees before anything is issued."
+      title={selectedCount === null ? 'Send grades to clans' : 'Send selected mentees for review'}
+      subtitle={selectedCount === null
+        ? "Mentors review the AI's grades for their own mentees before anything is issued."
+        : `${selectedCount} selected mentee${selectedCount === 1 ? '' : 's'} will be sent to their clan mentors for review.`}
       footer={
         <>
           <button
@@ -2205,7 +2311,7 @@ function SendToClansDrawer({
         <div className="rounded-xl border border-border bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
           <p className="font-semibold text-foreground">What happens next</p>
           <ul className="mt-1.5 list-disc space-y-1 pl-4">
-            <li>Every clan&apos;s mentors and co-mentors are notified.</li>
+            <li>{selectedCount === null ? 'Every relevant clan' : 'The selected mentees’ clans'}&apos; mentors and co-mentors are notified.</li>
             <li>They confirm each grade, or change it with a reason.</li>
             <li>You are notified as each clan finishes.</li>
             <li>The deadline is a nudge — you can still issue at any time.</li>

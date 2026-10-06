@@ -27,13 +27,16 @@ const dayLabel = (dateKey: string) => {
  * and hiding the gaps would throw away the only signal this feature exists for.
  */
 export function TaskProgressTimeline({
-  taskId, mode, className = '',
+  taskId, mode, className = '', readOnly = false,
 }: {
   taskId: string;
   /** 'mentee' can write; 'mentor' is read only. */
   mode: 'mentee' | 'mentor';
+  /** Frozen/closed cohort — hide write controls even in mentee mode. */
+  readOnly?: boolean;
   className?: string;
 }) {
+  const canWrite = mode === 'mentee' && !readOnly;
   const [data, setData] = useState<TaskProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [note, setNote] = useState('');
@@ -60,6 +63,7 @@ export function TaskProgressTimeline({
   useEffect(() => { load(); }, [load]);
 
   const save = async () => {
+    if (!canWrite) return;
     const text = note.trim();
     if (!text) { toast.error('Write a line about what you did'); return; }
     setSaving(true);
@@ -75,6 +79,7 @@ export function TaskProgressTimeline({
   };
 
   const remove = async (dateKey: string) => {
+    if (!canWrite) return;
     setBusyDay(dateKey);
     try {
       await menteeApi.removeTaskProgress(taskId, dateKey);
@@ -122,14 +127,14 @@ export function TaskProgressTimeline({
               key={day.dateKey}
               day={day}
               isLast={i === past.length - 1}
-              canEdit={mode === 'mentee'}
+              canEdit={canWrite}
               busy={busyDay === day.dateKey}
               onRemove={() => remove(day.dateKey)}
             />
           ))}
         </ol>
 
-        {mode === 'mentee' && (
+        {canWrite && (
           <div className="mt-4">
             <label htmlFor={`progress-${taskId}`} className="sr-only">What did you do today?</label>
             <textarea
@@ -154,6 +159,9 @@ export function TaskProgressTimeline({
               </button>
             </div>
           </div>
+        )}
+        {mode === 'mentee' && readOnly && (
+          <p className="mt-4 text-xs text-slate-500">Completed programs are read-only.</p>
         )}
       </div>
     </div>

@@ -35,6 +35,15 @@ const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 /** On track reads as Strong rather than perfect, leaving room to be ahead. */
 const ON_TRACK_SCORE = 75;
 
+/** End of the UTC calendar day for an as-of instant (whole close day counts). */
+function asOfDayEnd(asOf) {
+  if (!asOf) return null;
+  const d = new Date(asOf);
+  if (Number.isNaN(d.getTime())) return null;
+  const dateKey = d.toISOString().slice(0, 10);
+  return { dateKey, end: new Date(`${dateKey}T23:59:59.999Z`) };
+}
+
 class PerformanceService {
   /**
    * Attendance tallies per mentee, in one grouped query.
@@ -43,17 +52,21 @@ class PerformanceService {
    * denominator by `attendanceScore`. They are returned so a screen can show
    * "3 of 4, plus 2 excused" rather than an unexplained percentage.
    */
-  async attendanceCounts(menteeIds) {
+  async attendanceCounts(menteeIds, scope = {}) {
     const empty = {};
     if (!menteeIds.length) return empty;
+
+    const sessionWhere = { ...cohortService.clanWhere(scope) };
+    if (scope.asOfDateKey) sessionWhere.sessionDate = { [Op.lte]: scope.asOfDateKey };
 
     const rows = await models.CohortReviewEntry.findAll({
       where: { menteeId: { [Op.in]: menteeIds } },
       attributes: [
         'menteeId',
         'attendance',
-        [sequelize.fn('COUNT', sequelize.col('id')), 'n']
+        [sequelize.fn('COUNT', sequelize.col('CohortReviewEntry.id')), 'n']
       ],
+      include: [{ model: models.CohortReviewSession, as: 'session', attributes: [], required: true, where: sessionWhere }],
       group: ['mentee_id', 'attendance'],
       raw: true
     });
@@ -71,10 +84,11 @@ class PerformanceService {
    * enrolled. Turning up most weeks scores higher than one heroic fortnight
    * followed by silence.
    */
-  async consistencyCounts(menteeIds) {
+  async consistencyCounts(menteeIds, scope = {}) {
     const out = {};
     if (!menteeIds.length) return out;
 
+    const asOfSql = scope.asOfEnd ? 'AND completed_at <= :asOfEnd' : '';
     const [rows] = await sequelize.query(
       `SELECT mentee_id,
               COUNT(DISTINCT date_trunc('week', completed_at))::int AS active_weeks
@@ -82,9 +96,12 @@ class PerformanceService {
         WHERE organization_id = :organizationId AND mentee_id IN (:ids)
           AND status = 'completed'
           AND completed_at IS NOT NULL
+          ${asOfSql}
+          AND ${cohortService.taskSql(scope)}
         GROUP BY mentee_id`,
-      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId() } }
+      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId(), asOfEnd: scope.asOfEnd || null } }
     );
+
 
     for (const row of rows) out[row.mentee_id] = Number(row.active_weeks) || 0;
     return out;
@@ -94,35 +111,43 @@ class PerformanceService {
    * Each mentor's average rating across everyone they grade, which is what
    * quality gets divided by.
    */
-  async mentorAverages(menteeIds) {
+  async mentorAverages(menteeIds, scope = {}) {
     const out = {};
     if (!menteeIds.length) return out;
 
+    const asOfSql = scope.asOfEnd ? 'AND completed_at IS NOT NULL AND completed_at <= :asOfEnd' : '';
     const [rows] = await sequelize.query(
       `SELECT mentor_id, AVG(final_rating)::float AS avg_rating
          FROM assigned_tasks
         WHERE organization_id = :organizationId AND final_rating IS NOT NULL
           AND mentor_id IS NOT NULL
+          ${asOfSql}
+          AND ${cohortService.taskSql(scope)}
         GROUP BY mentor_id`,
-      { replacements: { organizationId: requireWorkspaceId() } }
+      { replacements: { organizationId: requireWorkspaceId(), asOfEnd: scope.asOfEnd || null } }
     );
+
 
     for (const row of rows) out[row.mentor_id] = Number(row.avg_rating) || null;
     return out;
   }
 
   /** Which mentor grades this mentee, so their generosity can be divided out. */
-  async gradingMentors(menteeIds) {
+  async gradingMentors(menteeIds, scope = {}) {
     const out = {};
     if (!menteeIds.length) return out;
 
+    const asOfSql = scope.asOfEnd ? 'AND COALESCE(assigned_at, created_at) <= :asOfEnd' : '';
     const [rows] = await sequelize.query(
       `SELECT DISTINCT ON (mentee_id) mentee_id, mentor_id
          FROM assigned_tasks
         WHERE organization_id = :organizationId AND mentee_id IN (:ids) AND mentor_id IS NOT NULL
+          ${asOfSql}
+          AND ${cohortService.taskSql(scope)}
         ORDER BY mentee_id, updated_at DESC`,
-      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId() } }
+      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId(), asOfEnd: scope.asOfEnd || null } }
     );
+
 
     for (const row of rows) out[row.mentee_id] = row.mentor_id;
     return out;
@@ -137,7 +162,7 @@ class PerformanceService {
    * so both are read onto the same hour scale here rather than one of them
    * being silently worth nothing.
    */
-  async effortHours(menteeIds) {
+  async effortHours(menteeIds, scope = {}) {
     const out = {};
     if (!menteeIds.length) return out;
 
@@ -145,6 +170,7 @@ class PerformanceService {
       .map(([size, hours]) => `WHEN '${size}' THEN ${hours}`)
       .join(' ');
 
+    const asOfSql = scope.asOfEnd ? 'AND a.completed_at IS NOT NULL AND a.completed_at <= :asOfEnd' : '';
     const [rows] = await sequelize.query(
       `SELECT a.mentee_id,
               COALESCE(SUM(
@@ -157,9 +183,12 @@ class PerformanceService {
          JOIN roadmap_tasks rt ON rt.id = a.roadmap_task_id
         WHERE a.organization_id = :organizationId AND rt.organization_id = :organizationId AND a.mentee_id IN (:ids)
           AND a.status = 'completed'
+          ${asOfSql}
+          AND ${cohortService.taskSql(scope, 'a')}
         GROUP BY a.mentee_id`,
-      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId() } }
+      { replacements: { ids: menteeIds, organizationId: requireWorkspaceId(), asOfEnd: scope.asOfEnd || null } }
     );
+
 
     for (const row of rows) out[row.mentee_id] = Number(row.hours) || 0;
     return out;
@@ -203,9 +232,24 @@ class PerformanceService {
    * @param {string[]} menteeIds
    * @param {object}   options.clanId  scopes which dimensions are switched off
    */
-  async scoreMentees(menteeIds, { clanId = null } = {}) {
+  async scoreMentees(menteeIds, { clanId = null, programId = null, live = false, asOf = null } = {}) {
     const ids = [...new Set(menteeIds)].filter(Boolean);
     if (!ids.length) return { weights: {}, disabled: [], mentees: [], eligibility: ELIGIBILITY };
+    // Standing clans share a programId with the closed cohort but must never
+    // inherit that program scope — only this clan's own work is scored.
+    let standing = false;
+    if (clanId) {
+      const clan = await models.Clan.findByPk(clanId);
+      if (clan?.kind === 'standing') standing = true;
+      else programId = clan?.programId || programId;
+    }
+    const bounds = asOfDayEnd(asOf);
+    const scope = {
+      clanId,
+      ...(standing ? { standing: true } : { programId }),
+      ...(bounds ? { asOfEnd: bounds.end, asOfDateKey: bounds.dateKey } : {}),
+    };
+    // Score live evidence; when asOf is set (program close date), ignore later activity.
 
     const [
       { weights, disabled, disabledBy },
@@ -217,12 +261,12 @@ class PerformanceService {
       hoursDone
     ] = await Promise.all([
       scoringSettingsService.effectiveWeights(clanId),
-      cohortService.preloadMenteeData(ids),
-      this.attendanceCounts(ids),
-      this.consistencyCounts(ids),
-      this.mentorAverages(ids),
-      this.gradingMentors(ids),
-      this.effortHours(ids)
+      cohortService.preloadMenteeData(ids, scope),
+      this.attendanceCounts(ids, scope),
+      this.consistencyCounts(ids, scope),
+      this.mentorAverages(ids, scope),
+      this.gradingMentors(ids, scope),
+      this.effortHours(ids, scope)
     ]);
 
     const rows = (await Promise.all(ids.map((id) => cohortService.buildMenteeRow(id, preloads))))
@@ -311,6 +355,8 @@ class PerformanceService {
         covered,
         eligible: blockers.length === 0 && score !== null,
         notRankedBecause: blockers.length ? blockers.join(', ') : null,
+        // Preserve the compact roster report alongside the scored components.
+        report: Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'completedTasks')),
         evidence: {
           absoluteProgress: row.absoluteProgress,
           relativeProgress: row.relativeProgress,
@@ -344,7 +390,7 @@ class PerformanceService {
     const eligible = mentees
       .filter((m) => m.eligible)
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-      .map((m, index) => ({ ...m, rank: index + 1 }));
+      .map((m, index) => ({ ...m, rank: m.historical ? m.rank : index + 1 }));
 
     const notRanked = mentees
       .filter((m) => !m.eligible)
@@ -394,11 +440,12 @@ class PerformanceService {
    * is a real difference between doing badly and not having started.
    */
   async clanStanding(clanId) {
-    const clan = await models.Clan.findByPk(clanId, { attributes: ['id', 'programId'] });
+    const clan = await models.Clan.findByPk(clanId, { attributes: ['id', 'programId', 'kind'] });
     if (!clan) throw new NotFoundError('Clan not found');
+    if (clan.kind === 'standing') return { average: null, band: null, rank: null, outOf: 0, ranked: 0 };
 
     const siblings = await models.Clan.findAll({
-      where: { programId: clan.programId },
+      where: { programId: clan.programId, kind: 'cohort' },
       attributes: ['id']
     });
 

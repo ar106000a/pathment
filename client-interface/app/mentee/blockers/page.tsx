@@ -8,6 +8,7 @@ import { useConfirm } from "@/lib/context/ConfirmContext";
 import { frictionApi } from "@/lib/services/friction-api";
 import { taskApi } from "@/lib/services/task-api";
 import { Drawer } from "@/components/shared/Drawer";
+import { useClan, isHistoricalCohortClan } from "@/lib/context/ClanContext";
 
 interface Blocker {
   id: string;
@@ -48,15 +49,18 @@ function BlockerRow({
   onDelete,
   busy,
   deleting,
+  readOnly = false,
 }: {
   b: Blocker;
   onResolve: () => void;
   onDelete: () => void;
   busy: boolean;
   deleting: boolean;
+  readOnly?: boolean;
 }) {
   const resolved = b.status === "resolved";
   const canDelete = withinDeleteWindow(b.openedAt);
+  const HISTORICAL_TITLE = "Completed programs are read-only";
   return (
     <div className="flex items-start gap-3 px-4 py-3.5">
       <span
@@ -95,7 +99,8 @@ function BlockerRow({
         {!resolved && (
           <button
             onClick={onResolve}
-            disabled={busy}
+            disabled={busy || readOnly}
+            title={readOnly ? HISTORICAL_TITLE : undefined}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-50"
           >
             {busy ? (
@@ -109,8 +114,8 @@ function BlockerRow({
         {canDelete && (
           <button
             onClick={onDelete}
-            disabled={deleting}
-            title="Delete this roadblock (within 6h of logging)"
+            disabled={deleting || readOnly}
+            title={readOnly ? HISTORICAL_TITLE : "Delete this roadblock (within 6h of logging)"}
             aria-label="Delete roadblock"
             className="grid h-7 w-7 place-items-center rounded-lg border border-slate-200 text-slate-400 hover:border-red-200 hover:text-red-600 disabled:opacity-50"
           >
@@ -129,6 +134,11 @@ function BlockerRow({
 export default function MenteeBlockers() {
   const { user } = useAuth();
   const confirm = useConfirm();
+  const { menteeClans, menteeActiveClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    menteeClans.find((c) => c.id === menteeActiveClanId),
+  );
+  const HISTORICAL_TITLE = "Completed programs are read-only";
   const [blockers, setBlockers] = useState<Blocker[]>([]);
   const [tasks, setTasks] = useState<TaskOpt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,7 +163,7 @@ export default function MenteeBlockers() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, menteeActiveClanId]);
 
   useEffect(() => {
     fetchAll();
@@ -174,7 +184,7 @@ export default function MenteeBlockers() {
         );
       })
       .catch(() => setTasks([]));
-  }, [user?.id]);
+  }, [user?.id, menteeActiveClanId]);
 
   const resolve = async (id: string) => {
     try {
@@ -225,7 +235,9 @@ export default function MenteeBlockers() {
         </div>
         <button
           onClick={() => setAddOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 shrink-0"
+          disabled={historical}
+          title={historical ? HISTORICAL_TITLE : undefined}
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" /> Add roadblock
         </button>
@@ -281,6 +293,7 @@ export default function MenteeBlockers() {
                     onDelete={() => remove(b)}
                     busy={busy === b.id}
                     deleting={deleting === b.id}
+                    readOnly={historical}
                   />
                 ))}
               </div>
@@ -300,6 +313,7 @@ export default function MenteeBlockers() {
                     onDelete={() => remove(b)}
                     busy={false}
                     deleting={deleting === b.id}
+                    readOnly={historical}
                   />
                 ))}
               </div>

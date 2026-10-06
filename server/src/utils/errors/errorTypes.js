@@ -45,6 +45,12 @@ class ConflictError extends AppError {
   }
 }
 
+class ClanFrozenError extends AppError {
+  constructor(message = 'This programme has closed. Its cohort clans are read-only.') {
+    super(message, 409, 'CLAN_FROZEN');
+  }
+}
+
 class UnprocessableEntityError extends AppError {
   constructor(message = 'Unable to process the request') {
     super(message, 422, 'UNPROCESSABLE');
@@ -72,6 +78,7 @@ module.exports = {
   BadRequestError,
   NotFoundError,
   ConflictError,
+  ClanFrozenError,
   UnprocessableEntityError,
   TooManyRequestsError,
   InternalServerError

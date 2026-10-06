@@ -41,6 +41,8 @@ export interface CohortMentee {
   tasksHard: number;
   sentiment: string;
   clan?: { id: string; name: string } | null;
+  /** All active memberships in the mentor's clans (standing + cohort dual members). */
+  clans?: Array<{ id: string; name: string | null }> | null;
   /** Joined the platform within the last ~10 days — show a "New" badge. */
   isNew?: boolean;
   joinedAt?: string | null;
@@ -71,7 +73,8 @@ export function useMentorCohort(): UseMentorCohortReturn {
   const { activeClanId } = useClan();
 
   const { data, loading, error, refetch } = useApiQuery<{ cohort: CohortMentee[]; totals: CohortTotals | null }>({
-    queryKey: qk.mentor.cohort,
+    // Clan is also sent via X-Active-Clan; key it so switching Standee ↔ cohort refetches.
+    queryKey: [...qk.mentor.cohort, activeClanId],
     queryFn: async () => {
       const res = await mentorApi.getCohort();
       return { cohort: res?.data?.cohort ?? [], totals: res?.data?.totals ?? null };

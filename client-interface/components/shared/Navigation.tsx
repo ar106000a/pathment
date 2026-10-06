@@ -120,7 +120,13 @@ export default function Navigation({ role }: NavigationProps) {
   // The badge follows the sidebar clan picker so it always matches the page:
   // 'All clans' = the full queue, otherwise just that clan's share.
   const isMentorNav = role === 'mentor';
-  const { unreadMessageCount, approvalCounts } = useNavBadges({ userId: user?.id, isMentor: isMentorNav, portal: role, activeClanId });
+  const { unreadMessageCount, approvalCounts } = useNavBadges({
+    userId: user?.id,
+    isMentor: isMentorNav,
+    portal: role,
+    activeClanId,
+    menteeActiveClanId,
+  });
   const approvalsBadgeCount = activeClanId === ALL_CLANS
     ? approvalCounts.total
     : (approvalCounts.byClan[activeClanId] || 0);
@@ -167,7 +173,7 @@ export default function Navigation({ role }: NavigationProps) {
     if (role === 'mentor' && clans.length >= 2) {
       const options = [
         { value: ALL_CLANS, label: 'All clans' },
-        ...clans.map((c) => ({ value: c.id, label: c.name })),
+        ...clans.map((c) => ({ value: c.id, label: `${c.name}${c.kind === 'standing' ? ' · Standing clan' : c.frozenAt ? ' · Completed history' : ' · Active program'}` })),
       ];
       return (
         <SelectMenu
@@ -184,7 +190,7 @@ export default function Navigation({ role }: NavigationProps) {
         <SelectMenu
           value={menteeActiveClanId || menteeClans[0].id}
           onChange={setMenteeActiveClanId}
-          options={menteeClans.map((c) => ({ value: c.id, label: c.name }))}
+          options={menteeClans.map((c) => ({ value: c.id, label: `${c.name}${c.kind === 'standing' ? ' · Standing clan' : c.frozenAt ? ' · Completed history' : ' · Active program'}` }))}
           ariaLabel="Switch clan"
           className="w-full"
         />

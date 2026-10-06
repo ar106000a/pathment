@@ -65,12 +65,17 @@ export function proxy(request: NextRequest) {
   // cannot silently lose their workspace.
   const appHost = process.env.NEXT_PUBLIC_APP_HOST || 'app.pathment.me';
   if (host === appHost) {
+    // Account-level entry points are deliberately workspace-neutral. The root
+    // decides from the signed-in account's real memberships; it must never
+    // infer a tenant from a stale cookie or the deployment's demo workspace.
+    if (pathname === '/' || pathname === '/workspaces') return NextResponse.next();
     const remembered = request.cookies.get(WORKSPACE_COOKIE)?.value;
-    const configured = process.env.DEFAULT_WORKSPACE_SLUG;
-    const fallback = validWorkspaceSlug(configured) ? configured : 'devweekends';
-    const slug = validWorkspaceSlug(remembered) ? remembered : fallback;
     const target = request.nextUrl.clone();
-    target.pathname = `/w/${slug}${pathname === '/' ? '/login' : pathname}`;
+    // Old short links may reuse a workspace the browser actually visited. With
+    // no valid remembered workspace, return to the chooser—never a hardcoded
+    // tenant that the account may not belong to.
+    target.pathname = validWorkspaceSlug(remembered) ? `/w/${remembered}${pathname}` : '/';
+    target.search = '';
     return NextResponse.redirect(target, 307);
   }
 

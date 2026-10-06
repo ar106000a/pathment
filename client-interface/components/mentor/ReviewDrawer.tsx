@@ -30,10 +30,12 @@ export function ReviewDrawer({
   item,
   onClose,
   onReviewed,
+  readOnly = false,
 }: {
   item: ApprovalItem;
   onClose: () => void;
   onReviewed: () => void;
+  readOnly?: boolean;
 }) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   // `total` is the task's max (set by difficulty). A late task is pre-penalized:
@@ -65,6 +67,10 @@ export function ReviewDrawer({
   const addTemplate = (t: string) => setNotes((prev) => (prev ? `${prev}\n${t}` : t));
 
   const submit = async (decision: Decision) => {
+    if (readOnly) {
+      toast.error('This clan is historical. Reviews are view-only.');
+      return;
+    }
     if ((decision === 'approved_notes' || decision === 'changes' || decision === 'rejected') && !notes.trim()) {
       toast.error('Add a short note for this decision');
       return;
@@ -119,6 +125,9 @@ export function ReviewDrawer({
       subtitle={`${item.mentee?.name ?? 'Mentee'} · v${item.version}`}
       width="lg"
       footer={
+        readOnly ? (
+          <p className="w-full text-sm text-slate-500">This clan is completed — grading is unavailable.</p>
+        ) : (
         <div className="grid grid-cols-2 gap-2 w-full">
           <button onClick={() => submit('approved')} disabled={!!busy || !allRequiredTicked} title={!allRequiredTicked ? 'Tick the required criteria first' : undefined}
             className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50">
@@ -137,6 +146,7 @@ export function ReviewDrawer({
             {busy === 'rejected' ? <Loader2 className="w-4 h-4 animate-spin" /> : null}Reject
           </button>
         </div>
+        )
       }
     >
       <div className="space-y-6">

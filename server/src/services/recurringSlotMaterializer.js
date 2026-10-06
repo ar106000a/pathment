@@ -103,6 +103,8 @@ class RecurringSlotMaterializer {
   }
 
   async _materialize(menteeId, mentorId, slotId, recConfig, clanId = null) {
+    const clan = clanId && await models.Clan.findByPk(clanId);
+    if (clan?.kind !== 'standing' && clan?.frozenAt) return { createdForSlot: 0, updatedForSlot: 0 };
     const taskService = require('./taskService');
     const now = new Date();
     const horizon = new Date(now.getTime() + HORIZON_DAYS * 86400000);

@@ -149,9 +149,9 @@ export default function LoginPage() {
                   : 'Please check your credentials and try again'}
               </p>
               {workspaceError === 'WORKSPACE_NOT_FOUND' && (
-                <a className="mt-2 inline-block text-sm underline" href="/w/devweekends/login">
-                  Open DevWeekends sign-in
-                </a>
+                <Link className="mt-2 inline-block text-sm underline" href="/">
+                  Choose another workspace
+                </Link>
               )}
             </div>
           </div>

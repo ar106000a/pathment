@@ -85,6 +85,8 @@ module.exports = (sequelize, DataTypes) => {
     decisionHistory: { type: DataTypes.JSONB, field: 'decision_history', defaultValue: [], allowNull: false },
     overridden: { type: DataTypes.BOOLEAN, defaultValue: false },
     overrideReason: { type: DataTypes.TEXT, field: 'override_reason' },
+    /** Reviewer attestations for the selected tier's optional admin checklist. */
+    criteriaChecks: { type: DataTypes.JSONB, field: 'criteria_checks', defaultValue: [], allowNull: false },
     status: {
       type: DataTypes.STRING(20),
       defaultValue: 'pending',

@@ -3,8 +3,10 @@ const { Op, col } = require('sequelize');
 const { models } = require('../db');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../utils/errors/errorTypes');
 const authzService = require('./authzService');
+const mentorshipPauseService = require('./mentorshipPauseService');
 const cfg = require('../config/reviewMeeting');
 const { activeOccurrence } = require('../utils/reviewRecurrence');
+const clanLifecycleService = require('./clanLifecycleService');
 
 // A live meeting older than this with no explicit end is treated as abandoned —
 // stops a never-ended meeting from showing the mentee "Join" banner forever.
@@ -119,6 +121,7 @@ class ReviewMeetingService {
   async startMeeting(mentorId, sessionId, { externalUrl } = {}) {
     if (!cfg.enabled) throw new ForbiddenError('Live review video is not enabled');
     const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     // Every call start begins with a clean attendance slate (no carry-over from a
     // prior call or seeded/earlier marks) — only actual joiners of THIS call count.
     await this._wipePerCallAttendance(sessionId);
@@ -195,6 +198,7 @@ class ReviewMeetingService {
    *  (startMeeting flips status back to in_progress). */
   async endMeeting(mentorId, sessionId) {
     const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     const patch = {};
     if (!session.meetingEndedAt) patch.meetingEndedAt = new Date();
     if (session.status !== 'finished') {
@@ -273,6 +277,7 @@ class ReviewMeetingService {
   /** Mentor toggles whether joining this review auto-marks mentees present. */
   async setAttendanceTracking(mentorId, sessionId, enabled) {
     const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     await session.update({ attendanceTracking: !!enabled });
     let marked = 0;
     if (enabled) {
@@ -292,6 +297,7 @@ class ReviewMeetingService {
    *  to mentees via the join config so they can vote/see results while it's on). */
   async setPolls(mentorId, sessionId, enabled) {
     const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     await session.update({ pollsEnabled: !!enabled });
     return { pollsEnabled: !!enabled };
   }
@@ -303,6 +309,7 @@ class ReviewMeetingService {
     const clanIds = (await models.ClanMembership.findAll({
       where: { userId, role: 'mentee', status: { [Op.in]: ['active', 'paused'] } },
       attributes: ['clanId'], raw: true,
+      include: [{ model: models.Clan, as: 'clan', attributes: [], required: true, where: { frozenAt: null } }],
     })).map((m) => m.clanId).filter(Boolean);
     if (!clanIds.length) return null;
 
@@ -343,6 +350,7 @@ class ReviewMeetingService {
     const session = await models.CohortReviewSession.findByPk(sessionId);
     if (!session) throw new NotFoundError('Review session not found');
     if (!(await this._menteeInClan(userId, session))) throw new ForbiddenError('You are not a mentee of this clan');
+    await clanLifecycleService.assertClanWritable(session.clanId);
 
     const [entry] = await models.CohortReviewEntry.findOrCreate({
       where: { sessionId, menteeId: userId },
@@ -365,12 +373,14 @@ class ReviewMeetingService {
     if (Object.keys(patch).length) await entry.update(patch);
 
     // Re-engage a paused mentee who shows up — reuse the existing behaviour.
-    require('./mentorshipPauseService').autoResumeIfPaused(userId, 'joined a review').catch(() => {});
+    mentorshipPauseService.autoResumeIfPaused(userId, 'joined a review', session.clanId).catch(() => {});
     return { present: (patch.attendance || entry.attendance) === 'present' };
   }
 
   /** Stamp the mentee's leave + accumulate presence seconds. */
   async selfLeave(userId, sessionId, seconds = 0) {
+    const session = await models.CohortReviewSession.findByPk(sessionId, { attributes: ['clanId'] });
+    if (session) await clanLifecycleService.assertClanWritable(session.clanId);
     const entry = await models.CohortReviewEntry.findOne({ where: { sessionId, menteeId: userId } });
     if (!entry) return { ok: true };
     const add = Math.max(0, Math.min(24 * 3600, parseInt(seconds, 10) || 0));
@@ -381,7 +391,8 @@ class ReviewMeetingService {
   // ── host: contribution ────────────────────────────────────────────────────
   /** Record accumulated dominant-speaker seconds per mentee (host-observed). */
   async recordTalkTime(mentorId, sessionId, items = []) {
-    await this._hostSession(mentorId, sessionId);
+    const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     if (!Array.isArray(items)) throw new ValidationError('items must be an array');
     for (const it of items) {
       if (!it || !it.menteeId) continue;
@@ -421,6 +432,7 @@ class ReviewMeetingService {
    */
   async finalizeContribution(mentorId, sessionId, menteeIds = [], { sendAbsentEmails } = {}) {
     const session = await this._hostSession(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     if (!Array.isArray(menteeIds)) throw new ValidationError('menteeIds must be an array');
     const gamificationService = require('./gamificationService');
     let awarded = 0;

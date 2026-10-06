@@ -33,10 +33,18 @@ export interface ProgramHealth {
   id: string;
   name: string;
   status: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  closedAt?: string | null;
   clanCount: number;
   memberCount: number;
   atRisk: number;
   avgCompletion: number;
+  avgOnTime: number;
+  openBlockers: number;
+  pendingApprovals: number;
+  summary: OrganizationSummary;
+  priorityMentees: AtRiskMentee[];
   clans: ClanHealthCard[];
 }
 

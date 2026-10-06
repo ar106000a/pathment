@@ -25,7 +25,7 @@ import { PERMISSIONS } from '@/lib/config/permissions';
  * turned it off), so nobody is offered an action they'd be refused.
  */
 export function MoveMenteeButton({
-  menteeId, menteeName, variant = 'button', className = '', onMoved,
+  menteeId, menteeName, variant = 'button', className = '', onMoved, disabled = false,
 }: {
   menteeId: string;
   menteeName?: string;
@@ -35,6 +35,7 @@ export function MoveMenteeButton({
   /** Extra classes so the button matches the action row it sits in. */
   className?: string;
   onMoved?: () => void;
+  disabled?: boolean;
 }) {
   const { can, loading: permsLoading } = usePermissions();
   const [config, setConfig] = useState<TransferConfig | null>(null);
@@ -54,16 +55,21 @@ export function MoveMenteeButton({
   if (permsLoading || !can(PERMISSIONS.MENTEE_TRANSFER) || !config) return null;
 
   const label = 'Move to another clan';
-  const onClick = () => (config.enabled ? setOpen(true) : setTeasing(true));
+  const onClick = () => {
+    if (disabled) return;
+    if (config.enabled) setOpen(true);
+    else setTeasing(true);
+  };
 
   return (
     <>
       {variant === 'icon' ? (
         <button
           onClick={onClick}
-          title={label}
+          disabled={disabled}
+          title={disabled ? 'Completed programs are read-only' : label}
           aria-label={label}
-          className={`relative p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 ${className}`}
+          className={`relative p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 disabled:opacity-50 ${className}`}
         >
           <ArrowRightLeft className="w-4 h-4" />
           {config.isNew && <NewDot />}
@@ -71,7 +77,8 @@ export function MoveMenteeButton({
       ) : variant === 'compact' ? (
         <button
           onClick={onClick}
-          className={`relative inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-brand-700 ${className}`}
+          disabled={disabled}
+          className={`relative inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-brand-700 disabled:opacity-50 ${className}`}
         >
           <ArrowRightLeft className="w-3.5 h-3.5" /> {label}
           {config.isNew && <NewDot />}
@@ -79,7 +86,9 @@ export function MoveMenteeButton({
       ) : (
         <button
           onClick={onClick}
-          className={`relative inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-card px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-brand-300 hover:bg-slate-50 hover:text-brand-700 ${className}`}
+          disabled={disabled}
+          title={disabled ? 'Completed programs are read-only' : undefined}
+          className={`relative inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-card px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-brand-300 hover:bg-slate-50 hover:text-brand-700 disabled:opacity-50 ${className}`}
         >
           <ArrowRightLeft className="w-4 h-4" /> {label}
           {config.isNew && <NewBadge />}

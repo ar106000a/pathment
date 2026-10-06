@@ -354,6 +354,23 @@ class AuthzService {
     const assignments = opts.assignments || (await this.getAssignments(user));
     if (await this.hasAdminAccess(user, { assignments })) return true;
 
+    // When a clan is selected, access must come through THAT clan — not another
+    // membership the mentee happens to share with the viewer.
+    if (opts.clanId) {
+      const resource = await this.scopeOfClan(opts.clanId);
+      if (!(await this.can(user, P.MENTEE_VIEW, resource, { assignments }))) return false;
+      const membership = await models.ClanMembership.findOne({
+        where: {
+          clanId: opts.clanId,
+          userId: menteeId,
+          status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
+          role: 'mentee'
+        },
+        attributes: ['id']
+      });
+      return Boolean(membership);
+    }
+
     const match = await models.MentorMenteeMatch.findOne({
       where: { mentorId: user.id, menteeId, status: 'active' }, attributes: ['id']
     });
@@ -598,20 +615,36 @@ class AuthzService {
    * `role: 'mentee'` matters — someone who co-mentors clan B while learning in
    * clan A must resolve to A, or their mentors lose access to their own mentee.
    */
-  async scopeOfMentee(menteeId) {
+  /**
+   * Mentee resource scope. Prefer an explicit clan (portal X-Active-Clan) when
+   * the mentee is in both a completed cohort and a standing clan — never pick
+   * an arbitrary first membership.
+   */
+  async scopeOfMentee(menteeId, preferredClanId = null) {
     if (!menteeId) return null;
     const out = { userId: menteeId };
-    // Paused counts (see VISIBLE_MEMBERSHIP_STATUSES), but an active placement
-    // must win when a mentee holds both - 'active' sorts before 'paused'.
-    const membership = await models.ClanMembership.findOne({
-      where: {
-        userId: menteeId,
-        status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
-        role: 'mentee'
-      },
-      attributes: ['clanId'],
-      order: [['status', 'ASC']]
-    });
+    const baseWhere = {
+      userId: menteeId,
+      status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
+      role: 'mentee',
+    };
+    let membership = null;
+    if (preferredClanId) {
+      membership = await models.ClanMembership.findOne({
+        where: { ...baseWhere, clanId: preferredClanId },
+        attributes: ['clanId'],
+      });
+    }
+    if (!membership) {
+      const rows = await models.ClanMembership.findAll({
+        where: baseWhere,
+        attributes: ['clanId'],
+        order: [['status', 'ASC']],
+      });
+      if (rows.length === 1) membership = rows[0];
+      // Multi-clan without a preferred clan: leave clanId unset so we don't
+      // authorize against the wrong side (standing vs cohort).
+    }
     if (membership) {
       out.clanId = membership.clanId;
       const clan = await models.Clan.findByPk(membership.clanId, { attributes: ['programId'] });
@@ -620,21 +653,41 @@ class AuthzService {
     return out;
   }
 
-  /** An enrollment: its program + the mentee (self) + their clan. */
+  /** An enrollment: its program + the mentee (self) + their cohort clan for that program. */
   async scopeOfEnrollment(enrollmentId) {
     if (!enrollmentId) return null;
     const enr = await models.Enrollment.findByPk(enrollmentId, { attributes: ['menteeId', 'programId'] });
     if (!enr) return null;
     const out = { userId: enr.menteeId, programId: enr.programId };
-    const membership = await models.ClanMembership.findOne({
+    // Prefer membership linked to this enrollment, then cohort clan for the program
+    // — never a standing membership that shares the same programId.
+    let membership = await models.ClanMembership.findOne({
       where: {
         userId: enr.menteeId,
+        enrollmentId,
         status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
-        role: 'mentee'
+        role: 'mentee',
       },
       attributes: ['clanId'],
-      order: [['status', 'ASC']]
     });
+    if (!membership && enr.programId) {
+      membership = await models.ClanMembership.findOne({
+        where: {
+          userId: enr.menteeId,
+          status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
+          role: 'mentee',
+        },
+        attributes: ['clanId'],
+        include: [{
+          model: models.Clan,
+          as: 'clan',
+          required: true,
+          attributes: [],
+          where: { programId: enr.programId, kind: 'cohort' },
+        }],
+        order: [['status', 'ASC']],
+      });
+    }
     if (membership) out.clanId = membership.clanId;
     return out;
   }

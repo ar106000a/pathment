@@ -1,21 +1,25 @@
 const { catchAsync } = require('../middlewares/errorHandler');
 const { successResponse } = require('../utils/responses');
 const promotionService = require('../services/promotionService');
-
-async function hasAdmin(req) {
-  // Derived capabilities (live), not the stored array, so an org/program admin
-  // sees the full pipeline even if their `capabilities` column is stale.
-  const caps = req.loadCapabilities ? await req.loadCapabilities() : [req.user.role];
-  return caps.includes('admin');
-}
+const authzService = require('../services/authzService');
+const { portalOf } = require('../middlewares/portalScope');
 
 const list = catchAsync(async (req, res) => {
-  const candidates = await promotionService.list({ actorId: req.user.id, isAdmin: await hasAdmin(req) });
+  const portal = portalOf(req);
+  const candidates = await promotionService.list({
+    actorId: req.user.id,
+    isAdmin: await authzService.actsAsAdmin(req.user),
+    activeClanId: portal.role === 'mentor' ? portal.clanId : null
+  });
   res.status(200).json(successResponse('Promotion candidates retrieved', { candidates }));
 });
 
 const nominate = catchAsync(async (req, res) => {
-  const candidate = await promotionService.nominate(req.body.menteeId, req.user.id);
+  const portal = portalOf(req);
+  const candidate = await promotionService.nominate(req.body.menteeId, req.user.id, {
+    isAdmin: await authzService.actsAsAdmin(req.user),
+    activeClanId: portal.role === 'mentor' ? portal.clanId : null
+  });
   res.status(201).json(successResponse('Mentee nominated', { candidate }, 201));
 });
 

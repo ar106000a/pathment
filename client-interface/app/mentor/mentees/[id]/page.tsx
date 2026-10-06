@@ -40,6 +40,7 @@ import {
   type CohortMomentum,
 } from '@/lib/hooks/mentor';
 import { useAuth } from '@/lib/context/AuthContext';
+import { useClan, isHistoricalMentorScope, ALL_CLANS } from '@/lib/context/ClanContext';
 import { useConfirm } from '@/lib/context/ConfirmContext';
 import { useMenteeActivity } from '@/lib/hooks/mentor/useMenteeActivity';
 import { frictionApi } from '@/lib/services/friction-api';
@@ -221,6 +222,8 @@ export default function MenteeDetail() {
   const { profile: insights, refetch: refetchProfile } =
     useMenteeProfile(menteeId);
   const { user } = useAuth();
+  const { clans, activeClanId } = useClan();
+  const historical = isHistoricalMentorScope(clans, activeClanId);
   const confirm = useConfirm();
   const selfName =
     `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'You';
@@ -313,12 +316,13 @@ export default function MenteeDetail() {
   const [pauseBusy, setPauseBusy] = useState(false);
   const togglePause = async () => {
     setPauseBusy(true);
+    const clanId = activeClanId !== ALL_CLANS ? activeClanId : undefined;
     try {
       if (pauseState?.paused) {
-        await mentorApi.resumeMentee(menteeId);
+        await mentorApi.resumeMentee(menteeId, clanId);
         toast.success('Mentee resumed');
       } else {
-        await mentorApi.pauseMentee(menteeId);
+        await mentorApi.pauseMentee(menteeId, undefined, clanId);
         toast.success('Mentee paused — kept in the clan, out of reports');
       }
       await refetchProfile();
@@ -547,7 +551,9 @@ export default function MenteeDetail() {
             </button>
             <button
               onClick={() => setAssigningTask(true)}
-              className="px-4 py-2 bg-card hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl transition-colors flex items-center gap-2"
+              disabled={historical}
+              title={historical ? 'Completed programs are read-only' : undefined}
+              className="px-4 py-2 bg-card hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
               Assign task
@@ -555,6 +561,7 @@ export default function MenteeDetail() {
             <NudgeButton
               menteeId={menteeId}
               menteeName={insights?.name}
+              disabled={historical}
               className="!rounded-xl !px-4"
             />
             <MoveMenteeButton
@@ -563,18 +570,22 @@ export default function MenteeDetail() {
                 insights?.name ||
                 `${mentee?.firstName ?? ''} ${mentee?.lastName ?? ''}`.trim()
               }
+              disabled={historical}
               className="!rounded-xl !px-4 !py-2"
             />
             <button
               onClick={openAttendance}
-              className="px-4 py-2 bg-card hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl transition-colors flex items-center gap-2"
+              disabled={historical}
+              title={historical ? 'Completed programs are read-only' : undefined}
+              className="px-4 py-2 bg-card hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
             >
               <CalendarCheck className="w-4 h-4" />
               Attendance
             </button>
             <button
               onClick={togglePause}
-              disabled={pauseBusy}
+              disabled={pauseBusy || historical}
+              title={historical ? 'Completed programs are read-only' : undefined}
               className={`px-4 py-2 rounded-xl transition-colors flex items-center gap-2 border disabled:opacity-50 ${pauseState?.paused ? 'bg-brand-50 border-brand-200 text-brand-700 hover:bg-brand-100' : 'bg-card border-slate-200 text-slate-700 hover:bg-slate-50'}`}
             >
               {pauseState?.paused ? (
@@ -593,7 +604,8 @@ export default function MenteeDetail() {
               enrollment?.status === 'matched') && (
               <button
                 onClick={() => setShowCompleteConfirm(true)}
-                disabled={completionLoading}
+                disabled={completionLoading || historical}
+                title={historical ? 'Completed programs are read-only' : undefined}
                 className="px-4 py-2 bg-green-50 hover:bg-green-100 border border-green-300 text-green-700 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -738,7 +750,9 @@ export default function MenteeDetail() {
               </div>
               <button
                 onClick={() => setAssigningTask(true)}
-                className="text-brand-600 hover:text-brand-700 text-sm flex items-center gap-1"
+                disabled={historical}
+                title={historical ? 'Completed programs are read-only' : undefined}
+                className="text-brand-600 hover:text-brand-700 text-sm flex items-center gap-1 disabled:opacity-50"
               >
                 <Plus className="w-4 h-4" />
                 Assign task
@@ -876,7 +890,8 @@ export default function MenteeDetail() {
                             </div>
                             <button
                               onClick={() => onResolveBlocker(b.id)}
-                              disabled={frictionBusy === b.id}
+                              disabled={frictionBusy === b.id || historical}
+                              title={historical ? 'Completed programs are read-only' : undefined}
                               className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg disabled:opacity-50"
                             >
                               {frictionBusy === b.id ? (
@@ -939,7 +954,8 @@ export default function MenteeDetail() {
                               <>
                                 <button
                                   onClick={() => onAcceptDelay(d.id)}
-                                  disabled={frictionBusy === d.id}
+                                  disabled={frictionBusy === d.id || historical}
+                                  title={historical ? 'Completed programs are read-only' : undefined}
                                   className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-lg disabled:opacity-50"
                                 >
                                   {frictionBusy === d.id ? (
@@ -951,8 +967,8 @@ export default function MenteeDetail() {
                                 </button>
                                 <button
                                   onClick={() => onRejectDelay(d.id)}
-                                  disabled={frictionBusy === d.id}
-                                  title="Reject and remove this pending delay"
+                                  disabled={frictionBusy === d.id || historical}
+                                  title={historical ? 'Completed programs are read-only' : 'Reject and remove this pending delay'}
                                   aria-label="Reject delay"
                                   className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                                 >
@@ -999,7 +1015,9 @@ export default function MenteeDetail() {
                 <h2 className="text-slate-900">1:1 notes</h2>
                 <button
                   onClick={() => setLoggingOneOnOne(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100"
+                  disabled={historical}
+                  title={historical ? 'Completed programs are read-only' : undefined}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100 disabled:opacity-50"
                 >
                   <Plus className="w-4 h-4" />
                   Log 1:1

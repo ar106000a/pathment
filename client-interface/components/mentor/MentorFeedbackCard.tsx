@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, MessageSquareHeart, Lock, Quote, ThumbsUp } from 'lucide-react';
 import { programReviewApi } from '@/lib/services/program-review-api';
+import { useClan, resolveActiveMentorClan } from '@/lib/context/ClanContext';
 
 interface PerDimension { average: number; responses: number }
 interface Summary {
@@ -27,13 +28,25 @@ const LABELS: Record<string, string> = {
  * The mentor's own anonymous feedback, shown only once enough mentees have
  * responded (server-gated) so no single voice is identifiable. Aggregates are
  * trimmed-mean to soften outliers - protecting the mentor from one bad day.
+ *
+ * Hidden for standing clans — they don't end, so end-of-program feedback
+ * does not apply there.
  */
 export function MentorFeedbackCard() {
+  const { clans, activeClanId } = useClan();
+  const clan = resolveActiveMentorClan(clans, activeClanId);
+  const standing = clan?.kind === 'standing';
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (standing) {
+      setSummary(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
+    setLoading(true);
     programReviewApi
       .getMySummary()
       .then((res: any) => {
@@ -41,10 +54,12 @@ export function MentorFeedbackCard() {
         const data = res?.data?.summary ?? res?.summary ?? res?.data ?? res;
         setSummary(data);
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setSummary(null); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [standing]);
+
+  if (standing) return null;
 
   if (loading) {
     return (

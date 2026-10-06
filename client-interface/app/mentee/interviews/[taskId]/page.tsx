@@ -20,6 +20,7 @@ import { useAudioLevel } from '@/lib/hooks/mentee/useAudioLevel';
 import { CodeEditor } from '@/components/shared/CodeEditor';
 import { InterviewerOrb, Waveform, RingTimer, MicCheck } from '@/components/mentee/interviewStudio';
 import { setActiveInterview, clearActiveInterview } from '@/lib/utils/activeInterview';
+import { useClan, isHistoricalCohortClan } from '@/lib/context/ClanContext';
 
 type Phase = 'loading' | 'intro' | 'lobby' | 'countdown' | 'active' | 'submitting' | 'done' | 'error';
 interface Draft { transcript: string; code: string; answerText: string; seconds: number; audioBlob: Blob | null }
@@ -30,6 +31,11 @@ const STUDIO = 'bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950';
 export default function InterviewRunnerPage({ params }: { params: Promise<{ taskId: string }> }) {
   const { taskId } = use(params);
   const router = useRouter();
+  const { menteeClans, menteeActiveClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    menteeClans.find((c) => c.id === menteeActiveClanId),
+  );
+  const HISTORICAL_TITLE = 'Completed programs are read-only';
 
   const [phase, setPhase] = useState<Phase>('loading');
   const [errorMsg, setErrorMsg] = useState('');
@@ -583,7 +589,7 @@ export default function InterviewRunnerPage({ params }: { params: Promise<{ task
                 <button onClick={() => router.push(`/mentee/tasks/${taskId}`)} className="mt-4 px-5 py-2.5 border border-slate-600 text-slate-200 rounded-xl text-sm">Back to task</button>
               </div>
             ) : (
-              <button onClick={enterLobby} className="mt-6 inline-flex items-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium">
+              <button onClick={enterLobby} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined} className="mt-6 inline-flex items-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium disabled:opacity-50">
                 {resuming ? <><RotateCcw className="w-4 h-4" /> Resume interview</> : isRedo ? <><RotateCcw className="w-4 h-4" /> Continue to redo</> : <><Play className="w-4 h-4" /> Continue to setup</>}
               </button>
             )}

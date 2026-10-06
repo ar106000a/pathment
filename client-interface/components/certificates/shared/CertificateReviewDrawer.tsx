@@ -106,6 +106,13 @@ export function CertificateReviewDrawer({
                         </p>
                       )}
 
+                      {(row.criteriaChecks?.length ?? 0) > 0 && (
+                        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          {row.criteriaChecks.length} certificate check{row.criteriaChecks.length === 1 ? '' : 's'} confirmed
+                        </div>
+                      )}
+
                       {row.overridden && (
                         <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3">
                           <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">Mentor reasoning</p>

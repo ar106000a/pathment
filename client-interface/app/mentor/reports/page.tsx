@@ -11,6 +11,7 @@ import { useMentorCohort, type CohortMentee } from '@/lib/hooks/mentor';
 import { mentorApi } from '@/lib/services/mentor-api';
 import { extractApiErrorMessage } from '@/lib/utils/api-error';
 import { useAuth } from '@/lib/context/AuthContext';
+import { useClan, resolveActiveMentorClan } from '@/lib/context/ClanContext';
 
 interface PeriodActivity {
   period: 'week' | 'month';
@@ -72,8 +73,13 @@ function MomentumPill({ momentum }: { momentum: CohortMentee['momentum'] }) {
 }
 
 export default function MentorReports() {
+  // Standing and cohort clans share this reports UI; cohort data is clan-scoped via X-Active-Clan.
   const { cohort, totals, loading, error, refetch } = useMentorCohort();
   const { user } = useAuth();
+  const { clans, activeClanId } = useClan();
+  const clan = resolveActiveMentorClan(clans, activeClanId);
+  const historical = Boolean(clan?.frozenAt);
+  const HISTORICAL_TITLE = 'Completed programs are read-only';
   const [period, setPeriod] = useState<'week' | 'month'>('week');
   const [copied, setCopied] = useState(false);
   const [aiDraft, setAiDraft] = useState<string | null>(null);
@@ -219,8 +225,12 @@ export default function MentorReports() {
               </button>
             ))}
           </div>
-          <button onClick={draftWithAI} disabled={!report || aiLoading}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
+          <button
+            onClick={draftWithAI}
+            disabled={!report || aiLoading || historical}
+            title={historical ? HISTORICAL_TITLE : undefined}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
+          >
             {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             {aiLoading ? 'Drafting…' : 'Draft with AI'}
           </button>

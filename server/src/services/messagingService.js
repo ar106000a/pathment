@@ -418,7 +418,8 @@ class MessagingService {
     const clanIdsByUser = new Map();
     if (otherUserIds.size) {
       const memberships = await models.ClanMembership.findAll({
-        where: { userId: { [Op.in]: [...otherUserIds] }, status: 'active' },
+        // Include paused — dual-clan mentees paused in one clan still belong there for scoping.
+        where: { userId: { [Op.in]: [...otherUserIds] }, status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES } },
         attributes: ['userId', 'clanId']
       });
       for (const m of memberships) {

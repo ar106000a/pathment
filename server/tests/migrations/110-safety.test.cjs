@@ -85,7 +85,7 @@ test('migration 110 safety in an exclusively owned PostgreSQL cluster', async t 
       assert.deepEqual((await rows('SELECT overrides FROM organization_subscriptions'))[0].overrides, {
         limits: { members: -1, programs: -1, clans: -1, storageGb: -1, aiEvaluationsPerMonth: -1 },
         features: { certificates: true, aiEvaluation: true, customBranding: true,
-          customDomain: true, advancedAnalytics: true, sso: true },
+          customDomain: true, advancedAnalytics: true, sso: true, programCompletionStanding: true },
       });
       const growth = (await rows("SELECT limits, features FROM plans WHERE key='growth'"))[0];
       assert.deepEqual(growth.limits, {

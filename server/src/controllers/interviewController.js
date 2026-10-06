@@ -2,6 +2,7 @@ const interviewKitService = require('../services/interviewKitService');
 const interviewSessionService = require('../services/interviewSessionService');
 const { successResponse } = require('../utils/responses');
 const { catchAsync } = require('../middlewares/errorHandler');
+const { requestedClanId } = require('../middlewares/portalScope');
 
 /**
  * Interview kit authoring — a mentor builds reusable structured interviews
@@ -51,13 +52,17 @@ exports.deleteKit = catchAsync(async (req, res) => {
 
 // GET /api/interviews/assignments/:taskId
 exports.getCandidateInterview = catchAsync(async (req, res) => {
-  const data = await interviewSessionService.getForCandidate(req.params.taskId, req.user.id);
+  const data = await interviewSessionService.getForCandidate(req.params.taskId, req.user.id, {
+    clanId: requestedClanId(req),
+  });
   res.status(200).json(successResponse('Interview retrieved', data));
 });
 
 // POST /api/interviews/assignments/:taskId/start
 exports.startInterview = catchAsync(async (req, res) => {
-  const session = await interviewSessionService.startOrResume(req.params.taskId, req.user.id);
+  const session = await interviewSessionService.startOrResume(req.params.taskId, req.user.id, {
+    clanId: requestedClanId(req),
+  });
   res.status(200).json(successResponse('Interview session ready', { session }));
 });
 

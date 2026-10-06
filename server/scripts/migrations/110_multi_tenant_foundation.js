@@ -18,7 +18,8 @@ const LEGACY_DEVWEEKENDS_OVERRIDES = Object.freeze({
   }),
   features: Object.freeze({
     certificates: true, aiEvaluation: true, customBranding: true,
-    customDomain: true, advancedAnalytics: true, sso: true,
+    // programCompletionStanding = standing-clan requests (paid). Program closeout is available on every plan.
+    customDomain: true, advancedAnalytics: true, sso: true, programCompletionStanding: true,
   }),
 });
 
@@ -27,19 +28,19 @@ const DEFAULT_PLANS = [
     key: 'starter', name: 'Starter', monthly: 0, annual: 0, sort: 10,
     description: 'For a small mentorship community getting started.',
     limits: { members: 100, programs: 2, clans: 5, storageGb: 2, aiEvaluationsPerMonth: 100 },
-    features: { certificates: true, aiEvaluation: true, customBranding: false, customDomain: false, advancedAnalytics: false, sso: false },
+    features: { certificates: true, aiEvaluation: true, customBranding: false, customDomain: false, advancedAnalytics: false, sso: false, programCompletionStanding: false },
   },
   {
     key: 'growth', name: 'Growth', monthly: 9900, annual: 99000, sort: 20,
     description: 'For growing fellowships running several programs and clans.',
     limits: { members: 1500, programs: 15, clans: 60, storageGb: 50, aiEvaluationsPerMonth: 5000 },
-    features: { certificates: true, aiEvaluation: true, customBranding: true, customDomain: true, advancedAnalytics: true, sso: false },
+    features: { certificates: true, aiEvaluation: true, customBranding: true, customDomain: true, advancedAnalytics: true, sso: false, programCompletionStanding: true },
   },
   {
     key: 'scale', name: 'Scale', monthly: 29900, annual: 299000, sort: 30,
     description: 'For large organizations needing advanced controls and support.',
     limits: { members: -1, programs: -1, clans: -1, storageGb: 500, aiEvaluationsPerMonth: 50000 },
-    features: { certificates: true, aiEvaluation: true, customBranding: true, customDomain: true, advancedAnalytics: true, sso: true },
+    features: { certificates: true, aiEvaluation: true, customBranding: true, customDomain: true, advancedAnalytics: true, sso: true, programCompletionStanding: true },
   },
 ];
 

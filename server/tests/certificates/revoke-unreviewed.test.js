@@ -147,7 +147,7 @@ describe('revoking certificates issued without a sign-off', () => {
       // This is the message revoking exists to clear.
       await expect(verification.verify(template.id, unreviewed.id,
         { decision: 'no_certificate', reason: 'Did not finish the work' }, lead))
-        .rejects.toThrow(/already been issued/i);
+        .rejects.toThrow(/already been (issued|sent)/i);
 
       await verification.revokeUnreviewed(template.id, admin);
       const row = await verification.verify(template.id, unreviewed.id,

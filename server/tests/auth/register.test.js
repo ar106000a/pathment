@@ -13,6 +13,9 @@ const app = require('../../src/index');
 const { cleanDb, createAdmin, createInviteToken } = require('../helpers/seed');
 
 const BASE = '/api/auth/register';
+let requestIp = 10;
+const registerRequest = () => request(app).post(BASE)
+  .set('X-Forwarded-For', `198.51.100.${requestIp}`);
 
 describe('POST /api/auth/register — Registration', () => {
   let admin;
@@ -20,6 +23,7 @@ describe('POST /api/auth/register — Registration', () => {
   const targetEmail = 'awaisfatehali@gmail.com';
 
   beforeEach(async () => {
+    requestIp += 1;
     await cleanDb();
     admin = await createAdmin();
     ({ rawToken: validToken } = await createInviteToken({ adminId: admin.id, role: 'mentee', email: targetEmail }));
@@ -27,7 +31,7 @@ describe('POST /api/auth/register — Registration', () => {
 
   // TC-M01
   it('TC-M01: creates account and returns 201 with a valid invite token', async () => {
-    const res = await request(app).post(BASE).send({
+    const res = await registerRequest().send({
       firstName: 'Awais',
       lastName: 'Fateh Ali',
       email: targetEmail,
@@ -45,7 +49,7 @@ describe('POST /api/auth/register — Registration', () => {
   // TC-M02
   it('TC-M02: returns 409 when email is already registered', async () => {
     // First registration succeeds
-    await request(app).post(BASE).send({
+    await registerRequest().send({
       firstName: 'Awais',
       lastName: 'Fateh Ali',
       email: targetEmail,
@@ -68,7 +72,7 @@ describe('POST /api/auth/register — Registration', () => {
       email: targetEmail,
     });
 
-    const res = await request(app).post(BASE).send({
+    const res = await registerRequest().send({
       firstName: 'Awais',
       lastName: 'Fateh Ali',
       email: targetEmail,
@@ -86,7 +90,7 @@ describe('POST /api/auth/register — Registration', () => {
   it('TC-M03: returns 400 when password is too weak', async () => {
     const { rawToken: token2 } = await createInviteToken({ adminId: admin.id, role: 'mentee', email: 'weak@test.com' });
 
-    const res = await request(app).post(BASE).send({
+    const res = await registerRequest().send({
       firstName: 'Weak',
       lastName: 'Pass',
       email: 'weak@test.com',
@@ -102,7 +106,7 @@ describe('POST /api/auth/register — Registration', () => {
 
   // TC-M04
   it('TC-M04: returns 400 for invalid email format', async () => {
-    const res = await request(app).post(BASE).send({
+    const res = await registerRequest().send({
       firstName: 'Awais',
       lastName: 'Test',
       email: 'awaisfatehali.edu',   // missing @
@@ -118,7 +122,7 @@ describe('POST /api/auth/register — Registration', () => {
 
   // TC-M05
   it('TC-M05: returns 400 when all required fields are empty', async () => {
-    const res = await request(app).post(BASE).send({});
+    const res = await registerRequest().send({});
 
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);

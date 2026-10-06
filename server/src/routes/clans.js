@@ -29,6 +29,26 @@ const avatarService = require('../services/clanAvatarService');
 const upload = require('../middlewares/upload');
 const { catchAsync } = require('../middlewares/errorHandler');
 const { successResponse } = require('../utils/responses');
+
+/**
+ * Standing clan mentee roster + activity (after formal program close)
+ */
+router.post(
+  '/:id/standing-members',
+  authenticate,
+  validateParams(clanSchemas.idParams),
+  validateBody(clanSchemas.standingMembersBody),
+  clanController.addStandingMembers
+);
+
+router.get(
+  '/:id/activity',
+  authenticate,
+  validateParams(clanSchemas.idParams),
+  validateQuery(clanSchemas.standingActivityQuery),
+  clanController.getStandingActivity
+);
+
 const canEditAvatar = catchAsync(async (req, res, next) => { await avatarService.editableClan(req.params.id, req.user); next(); });
 router.post('/:id/avatar', authenticate, validateParams(clanSchemas.idParams), canEditAvatar, upload.singleSafe('file'), catchAsync(async (req, res) => {
   res.json(successResponse('Clan photo updated', await avatarService.setAvatar(req.params.id, req.user, req.file)));

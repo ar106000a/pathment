@@ -5,7 +5,9 @@ const { todayInZone } = require('../utils/timezone');
 const { createAuditLog } = require('../utils/auditContext');
 const cohortService = require('./cohortService');
 const authzService = require('./authzService');
+const mentorshipPauseService = require('./mentorshipPauseService');
 const lockService = require('./cohortReviewLockService');
+const clanLifecycleService = require('./clanLifecycleService');
 
 /**
  * cohortReviewService - dated, saved, editable cohort-review sessions.
@@ -53,6 +55,8 @@ class CohortReviewService {
    * (pre-fix) reconcile created — but only ones the mentor never touched.
    */
   async _reconcileEntries(session) {
+    const clan = session.clanId && await models.Clan.findByPk(session.clanId);
+    if (clan?.kind !== 'standing' && clan?.frozenAt) return;
     // Clan-scoped: the cohort is everyone in THIS session's clan, so a lead and
     // a co-mentor of the clan reconcile to the exact same mentee set.
     const [menteeIds, joinDates] = await Promise.all([
@@ -204,6 +208,7 @@ class CohortReviewService {
 
   async createSession(mentorId, { date, title, clanId } = {}) {
     const resolvedClanId = await this._resolveClanId(mentorId, clanId);
+    await clanLifecycleService.assertClanWritable(resolvedClanId);
     const tz = await this._mentorTz(mentorId);
     const sessionDate = date && /^\d{4}-\d{2}-\d{2}$/.test(String(date)) ? String(date) : todayInZone(tz);
     // One session per clan per day: reuse an existing one rather than duplicating.
@@ -222,6 +227,7 @@ class CohortReviewService {
 
   async updateSession(mentorId, sessionId, updates = {}) {
     const session = await this._canAccess(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     if (updates.title !== undefined) session.title = String(updates.title || '').trim().slice(0, 150) || null;
     if (updates.note !== undefined) session.note = updates.note || null;
     if (updates.sessionDate !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(updates.sessionDate))) session.sessionDate = updates.sessionDate;
@@ -232,6 +238,7 @@ class CohortReviewService {
   /** Upsert a mentee's attendance / status / note within a session. */
   async setEntry(mentorId, sessionId, menteeId, patch = {}) {
     const session = await this._canAccess(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     let entry = await models.CohortReviewEntry.findOne({ where: { sessionId: session.id, menteeId } });
     if (!entry) entry = await models.CohortReviewEntry.create({ sessionId: session.id, menteeId, status: 'pending' });
 
@@ -250,7 +257,7 @@ class CohortReviewService {
 
     // Re-engagement: marking a paused mentee present means they came back.
     if (patch.attendance === 'present') {
-      require('./mentorshipPauseService').autoResumeIfPaused(menteeId, 'attended a review').catch(() => {});
+      mentorshipPauseService.autoResumeIfPaused(menteeId, 'attended a review', session.clanId).catch(() => {});
     }
 
     const fresh = await models.CohortReviewEntry.findByPk(entry.id, {
@@ -306,6 +313,7 @@ class CohortReviewService {
 
   async finishSession(mentorId, sessionId) {
     const session = await this._canAccess(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     session.status = 'finished';
     session.finishedAt = new Date();
     await session.save();
@@ -316,6 +324,7 @@ class CohortReviewService {
   async reopenSession(mentorId, sessionId) {
     await lockService.assertCanDelete(mentorId);
     const session = await this._canAccess(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     session.status = 'in_progress';
     session.finishedAt = null;
     await session.save();
@@ -325,6 +334,7 @@ class CohortReviewService {
   async deleteSession(mentorId, sessionId) {
     await lockService.assertCanDelete(mentorId);
     const session = await this._canAccess(mentorId, sessionId);
+    await clanLifecycleService.assertClanWritable(session.clanId);
     await models.CohortReviewEntry.destroy({ where: { sessionId: session.id } });
     await session.destroy();
     createAuditLog({

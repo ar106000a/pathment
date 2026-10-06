@@ -26,12 +26,14 @@ describe('organization tenancy', () => {
       name: `Second workspace ${Date.now()}`, slug: `second-${Date.now()}`, status: 'active', timezone: 'UTC',
     });
     const growth = await models.Plan.findOne({ where: { key: 'growth' } });
-    await models.OrganizationSubscription.create({ organizationId: secondary.id, planId: growth.id, status: 'active' });
+    await runWithRequestContext({ organizationId: secondary.id }, () =>
+      models.OrganizationSubscription.create({ organizationId: secondary.id, planId: growth.id, status: 'active' }));
     admin = await createAdmin({ email: `tenant-admin-${Date.now()}@test.com` });
     outsider = await createMentee({ email: `tenant-outsider-${Date.now()}@test.com` });
-    await models.OrganizationMembership.create({
-      organizationId: secondary.id, userId: admin.id, role: 'admin', status: 'active', joinedAt: new Date(),
-    });
+    await runWithRequestContext({ organizationId: secondary.id }, () =>
+      models.OrganizationMembership.create({
+        organizationId: secondary.id, userId: admin.id, role: 'admin', status: 'active', joinedAt: new Date(),
+      }));
     token = generateAccessToken({ id: admin.id, email: admin.email, role: admin.role });
     outsiderToken = generateAccessToken({ id: outsider.id, email: outsider.email, role: outsider.role });
 
@@ -120,9 +122,10 @@ describe('organization tenancy', () => {
 
   it('does not inherit account mentor/admin roles as a member of another workspace', async () => {
     const authz = require('../../src/services/authzService');
-    await models.OrganizationMembership.update({ role: 'member' }, {
-      where: { organizationId: secondary.id, userId: admin.id },
-    });
+    await runWithRequestContext({ organizationId: secondary.id }, () =>
+      models.OrganizationMembership.update({ role: 'member' }, {
+        where: { organizationId: secondary.id, userId: admin.id },
+      }));
     const capabilities = await runWithRequestContext({ organizationId: secondary.id, userId: admin.id },
       () => authz.getCapabilities(admin));
     expect(capabilities).not.toContain('admin');
@@ -167,16 +170,18 @@ describe('organization tenancy', () => {
   it('activates only the requested invoice plan and records operator evidence atomically', async () => {
     const billing = require('../../src/services/manualBillingService');
     const orgService = require('../../src/services/organizationService');
-    await orgService.requestPlan(admin.id, secondary.id, 'scale');
-    const input = { workspace: secondary.slug, planKey: 'scale', invoiceReference: 'INV-TEST-1',
-      operator: 'test-operator', periodEnd: new Date(Date.now() + 86400000).toISOString() };
-    expect((await billing.activateRequestedPlan(input)).alreadyActivated).toBe(false);
-    expect((await billing.activateRequestedPlan(input)).alreadyActivated).toBe(true);
-    const subscription = await orgService.subscription(secondary.id);
-    expect(subscription.plan.key).toBe('scale');
-    expect(subscription.provider).toBe('manual_invoice');
-    expect(subscription.requestedPlanId).toBeNull();
-    await expect(billing.activateRequestedPlan({ ...input, planKey: 'growth' })).rejects.toThrow(/invoice/i);
+    await runWithRequestContext({ organizationId: secondary.id, userId: admin.id }, async () => {
+      await orgService.requestPlan(admin.id, secondary.id, 'scale');
+      const input = { workspace: secondary.slug, planKey: 'scale', invoiceReference: 'INV-TEST-1',
+        operator: 'test-operator', periodEnd: new Date(Date.now() + 86400000).toISOString() };
+      expect((await billing.activateRequestedPlan(input)).alreadyActivated).toBe(false);
+      expect((await billing.activateRequestedPlan(input)).alreadyActivated).toBe(true);
+      const subscription = await orgService.subscription(secondary.id);
+      expect(subscription.plan.key).toBe('scale');
+      expect(subscription.provider).toBe('manual_invoice');
+      expect(subscription.requestedPlanId).toBeNull();
+      await expect(billing.activateRequestedPlan({ ...input, planKey: 'growth' })).rejects.toThrow(/invoice/i);
+    });
   });
 
   it('lets organization admins request a plan without activating it prematurely', async () => {
@@ -220,10 +225,11 @@ describe('organization tenancy', () => {
 
   it('enforces plan features on the server while allowing ordinary settings', async () => {
     const starter = await models.Plan.findOne({ where: { key: 'starter' } });
-    await models.OrganizationSubscription.update(
-      { planId: starter.id },
-      { where: { organizationId: secondary.id } },
-    );
+    await runWithRequestContext({ organizationId: secondary.id }, () =>
+      models.OrganizationSubscription.update(
+        { planId: starter.id },
+        { where: { organizationId: secondary.id } },
+      ));
 
     const branding = await request(app)
       .patch('/api/organizations/current')

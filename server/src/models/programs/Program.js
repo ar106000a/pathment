@@ -64,6 +64,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATEONLY,
       field: 'end_date'
     },
+    closedAt: { type: DataTypes.DATE, field: 'closed_at' },
     maxEnrollments: {
       type: DataTypes.INTEGER,
       field: 'max_enrollments'

@@ -14,6 +14,7 @@ interface AttendanceSectionProps {
   onSelectMentee: (index: number) => void;
   onSaveAttendance: (updates: Record<string, Attendance>) => Promise<void>;
   isSaving: boolean;
+  readOnly?: boolean;
 }
 
 // Sort weight for the "all" view: present → absent → excused → not-yet-marked.
@@ -26,6 +27,7 @@ export function AttendanceSection({
   onSelectMentee,
   onSaveAttendance,
   isSaving,
+  readOnly = false,
 }: AttendanceSectionProps) {
   const [currentFilter, setCurrentFilter] = useState<AttendanceFilter>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -70,7 +72,9 @@ export function AttendanceSection({
         </div>
         <button
           onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-medium transition-colors shrink-0 w-full sm:w-auto"
+          disabled={readOnly}
+          title={readOnly ? 'Completed programs are read-only' : undefined}
+          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-medium transition-colors shrink-0 w-full sm:w-auto disabled:opacity-50"
         >
           <CheckCircle2 className="w-4 h-4" />
           Attendance Sheet

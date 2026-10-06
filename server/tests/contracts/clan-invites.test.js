@@ -180,14 +180,14 @@ describe('acting on one', () => {
 describe('sending one', () => {
   // Both of these are the whole reason the phone shows what the server said
   // rather than "Check the address and try again".
-  test('says plainly when the person is already on Pathment', async () => {
+  test('lets an existing Pathment account receive another clan invite', async () => {
     const response = await request(app)
       .post(`/api/clans/${clan.id}/invite`)
       .set('Authorization', authHeader(lead))
       .send({ email: admin.email });
 
-    expect(response.status).toBe(409);
-    expect(response.body.message).toMatch(/already exists/i);
+    expect(response.status).toBe(201);
+    expect(response.body.data.invite.email).toBe(admin.email);
   });
 
   test('says plainly when an invite is already out', async () => {

@@ -26,7 +26,7 @@ const fmtTalk = (s: number) => (s < 60 ? `${s}s` : `${Math.round(s / 60)}m`);
  * the contribution modal moved to the provider for the same reason: they have to
  * outlive this page.
  */
-export function ReviewMeetingPanel({ sessionId, isDraft, ensureSession, onAttendanceSync, onEnded }: {
+export function ReviewMeetingPanel({ sessionId, isDraft, ensureSession, onAttendanceSync, onEnded, readOnly = false }: {
   sessionId: string;
   isDraft?: boolean;
   /** Creates today's session on demand, so "Start meeting" works from a blank page. */
@@ -37,6 +37,7 @@ export function ReviewMeetingPanel({ sessionId, isDraft, ensureSession, onAttend
   /** Fired after the call ends (which now auto-finishes the session server-side) so
    *  the page can reload and show the "Finished" state. */
   onEnded?: () => void;
+  readOnly?: boolean;
 }) {
   // The session id can arrive late (created by Start), so track it locally.
   const [liveSessionId, setLiveSessionId] = useState(sessionId);
@@ -276,11 +277,11 @@ export function ReviewMeetingPanel({ sessionId, isDraft, ensureSession, onAttend
           // that implies unfinished business. Only a never-started session shows
           // the primary "Start meeting".
           (scored || !!meeting?.endedAt) ? (
-            <button onClick={start} disabled={busy} className="text-xs font-medium text-slate-500 hover:text-brand-700 disabled:opacity-50">
+            <button onClick={start} disabled={busy || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="text-xs font-medium text-slate-500 hover:text-brand-700 disabled:opacity-50">
               {busy ? 'Starting…' : 'Start a new call'}
             </button>
           ) : (
-            <button onClick={start} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+            <button onClick={start} disabled={busy || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
               {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />} {meeting?.startedAt ? 'Resume meeting' : 'Start meeting'}
             </button>
           )
@@ -289,7 +290,7 @@ export function ReviewMeetingPanel({ sessionId, isDraft, ensureSession, onAttend
             <button onClick={reloadCall} title="Rebuild the call if the video is stuck" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:border-brand-300 hover:text-brand-700">
               <RotateCw className="w-3.5 h-3.5" /> Reload video
             </button>
-            <button onClick={endHostCall} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">
+            <button onClick={endHostCall} disabled={busy || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">
               {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <VideoOff className="w-3.5 h-3.5" />} End &amp; score
             </button>
           </div>

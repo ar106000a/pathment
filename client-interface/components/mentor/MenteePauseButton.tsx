@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { PauseCircle, PlayCircle, Loader2 } from 'lucide-react';
 import { mentorApi } from '@/lib/services/mentor-api';
+import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
 
 /**
  * Self-contained Pause / Resume control for a mentee. Fetches the mentee's
@@ -11,7 +12,9 @@ import { mentorApi } from '@/lib/services/mentor-api';
  * that page needing to know about pausing. Works for admins (org-wide) and
  * mentors (their clans) via the same endpoints.
  */
-export function MenteePauseButton({ menteeId, className = '' }: { menteeId: string; className?: string }) {
+export function MenteePauseButton({ menteeId, disabled = false, className = '' }: { menteeId: string; disabled?: boolean; className?: string }) {
+  const { activeClanId } = useClan();
+  const clanId = activeClanId !== ALL_CLANS ? activeClanId : undefined;
   const [paused, setPaused] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,10 +31,11 @@ export function MenteePauseButton({ menteeId, className = '' }: { menteeId: stri
   if (paused === null) return null;
 
   const toggle = async () => {
+    if (disabled) return;
     setBusy(true);
     try {
-      if (paused) { await mentorApi.resumeMentee(menteeId); toast.success('Mentee resumed'); setPaused(false); }
-      else { await mentorApi.pauseMentee(menteeId); toast.success('Mentee paused — kept in the clan, out of reports'); setPaused(true); }
+      if (paused) { await mentorApi.resumeMentee(menteeId, clanId); toast.success('Mentee resumed'); setPaused(false); }
+      else { await mentorApi.pauseMentee(menteeId, undefined, clanId); toast.success('Mentee paused — kept in the clan, out of reports'); setPaused(true); }
     } catch { toast.error('Could not update pause status'); }
     finally { setBusy(false); }
   };
@@ -39,7 +43,8 @@ export function MenteePauseButton({ menteeId, className = '' }: { menteeId: stri
   return (
     <button
       onClick={toggle}
-      disabled={busy}
+      disabled={busy || disabled}
+      title={disabled ? 'Completed programs are read-only' : undefined}
       className={`px-4 py-2 rounded-xl transition-colors inline-flex items-center gap-2 border disabled:opacity-50 ${paused ? 'bg-brand-50 border-brand-200 text-brand-700 hover:bg-brand-100' : 'bg-card border-slate-200 text-slate-700 hover:bg-slate-50'} ${className}`}
     >
       {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : paused ? <PlayCircle className="w-4 h-4" /> : <PauseCircle className="w-4 h-4" />}

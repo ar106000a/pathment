@@ -86,6 +86,7 @@ export function MenteeEvidenceDrawer({
   const [draftAnswer, setDraftAnswer] = useState('');
   const [questionBusy, setQuestionBusy] = useState(false);
   const [notifying, setNotifying] = useState(false);
+  const [criteriaChecks, setCriteriaChecks] = useState<string[]>([]);
 
   /**
    * Deps are the two ids and nothing else — deliberately.
@@ -104,8 +105,12 @@ export function MenteeEvidenceDrawer({
       const res = await certificatesApi.getMenteeEvidence(templateId, menteeId);
       if (res.success && res.data) {
         setEvidence(res.data);
-        setDraftTier(initialSelection ?? (res.data.verification ? reviewSelection(res.data.verification) : aiSelection(res.data.ai)));
+        // Once a certificate exists, what was actually issued is the truth.
+        // Falling back to the old AI "No certificate" result made the drawer
+        // contradict the credential the admin had just sent.
+        setDraftTier(initialSelection ?? res.data.issued?.tier ?? (res.data.verification ? reviewSelection(res.data.verification) : aiSelection(res.data.ai)));
         setReason(res.data.verification?.overrideReason || '');
+        setCriteriaChecks(res.data.verification?.criteriaChecks || []);
       } else {
         setError('That record came back empty.');
       }
@@ -171,7 +176,8 @@ export function MenteeEvidenceDrawer({
   }, [menteeId, navigation]);
 
   const tierName = (id: string | null | undefined) =>
-    id === NO_CERTIFICATE ? 'No certificate' : evidence?.criteria.find((c) => c.id === id)?.name || id || '—';
+    id === NO_CERTIFICATE ? 'No certificate'
+      : evidence?.criteria.find((c) => c.id === id)?.name || id || '—';
 
   const v = evidence?.verification ?? null;
 
@@ -302,6 +308,10 @@ export function MenteeEvidenceDrawer({
   const isChange = Boolean(draftTier && draftTier !== aiTier);
   const needsReason = isChange || draftTier === NO_CERTIFICATE || (v?.status === 'verified' && draftTier !== reviewSelection(v));
   const reasonMissing = needsReason && !reason.trim();
+  const activeChecklist = draftTier === NO_CERTIFICATE
+    ? []
+    : evidence?.criteria.find(item => item.id === draftTier)?.reviewChecklist || [];
+  const missingChecklist = activeChecklist.filter(item => !criteriaChecks.includes(item));
 
   const save = async () => {
     if (!templateId || !menteeId) return;
@@ -319,6 +329,7 @@ export function MenteeEvidenceDrawer({
       await certificatesApi.verifyOne(templateId, menteeId, {
         ...decisionPayload(draftTier),
         reason: needsReason ? reason.trim() : undefined,
+        criteriaChecks,
       });
       toast.success(isChange ? actionLabels.doneChanged : actionLabels.done);
       await onDecided?.();
@@ -497,6 +508,16 @@ export function MenteeEvidenceDrawer({
                 <p className="text-xs text-foreground leading-relaxed">
                   {evidence.ai.reasoning || 'No reasoning was recorded for this evaluation.'}
                 </p>
+                {evidence.ai.evaluation_summary && (
+                  <div className="rounded-xl border border-violet-500/15 bg-background/70 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">
+                      Evaluation summary
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-foreground">
+                      {evidence.ai.evaluation_summary}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {(evidence.ai.matched_keywords?.length > 0 || evidence.ai.missing_keywords?.length > 0) && (
@@ -526,6 +547,23 @@ export function MenteeEvidenceDrawer({
                         {rule.evidence && (
                           <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{rule.evidence}</p>
                         )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(evidence.ai.criteria_checks || []).length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">AI checklist evidence</p>
+                  {evidence.ai.criteria_checks!.map((check, index) => (
+                    <div key={`${check.item}-${index}`} className="flex items-start gap-2 rounded-xl border border-border bg-card p-2.5">
+                      {check.passed && check.evidence
+                        ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                        : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />}
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-foreground">{check.item}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{check.evidence || 'No supporting evidence was found.'}</p>
                       </div>
                     </div>
                   ))}
@@ -778,12 +816,49 @@ export function MenteeEvidenceDrawer({
               <div className="space-y-3 rounded-2xl border border-border bg-muted/20 p-4">
                 <SelectMenu
                   value={draftTier}
-                  onChange={setDraftTier}
+                  onChange={(tier) => { setDraftTier(tier); setCriteriaChecks([]); }}
                   options={[{ value: NO_CERTIFICATE, label: 'No certificate' }, ...evidence.criteria.map((c) => ({ value: c.id, label: c.name }))]}
                   placeholder="Pick a badge"
                   ariaLabel="Badge"
                   className="w-full"
                 />
+
+                {activeChecklist.length > 0 && (
+                  <fieldset className="space-y-2 rounded-xl border border-brand-500/20 bg-background p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <legend className="text-xs font-semibold text-foreground">Required certificate checks</legend>
+                        <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">Confirm each item from your review of this mentee. These attestations are visible to the admin.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCriteriaChecks(missingChecklist.length ? [...activeChecklist] : [])}
+                        className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-brand-600 hover:bg-brand-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500"
+                      >
+                        {missingChecklist.length ? 'Select all' : 'Clear all'}
+                      </button>
+                    </div>
+                    <div className="space-y-1.5">
+                      {activeChecklist.map((item, index) => {
+                        const id = `certificate-check-${draftTier}-${index}`;
+                        const checked = criteriaChecks.includes(item);
+                        return (
+                          <label key={id} htmlFor={id} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border p-2.5 hover:bg-muted/40">
+                            <input
+                              id={id}
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => setCriteriaChecks(current => checked ? current.filter(value => value !== item) : [...current, item])}
+                              className="mt-0.5 h-4 w-4 rounded border-border accent-brand-600"
+                            />
+                            <span className="text-xs leading-relaxed text-foreground">{item}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {missingChecklist.length > 0 && <p role="status" className="text-[11px] font-medium text-amber-600">Confirm all {activeChecklist.length} checks to sign off this certificate.</p>}
+                  </fieldset>
+                )}
 
                 {/* Required, because an admin reading this in a month — and the
                     mentor themselves — need to know why the evidence was
@@ -806,7 +881,7 @@ export function MenteeEvidenceDrawer({
                 <button
                   type="button"
                   onClick={save}
-                  disabled={saving || !draftTier || reasonMissing}
+                  disabled={saving || !draftTier || reasonMissing || missingChecklist.length > 0}
                   className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -913,14 +988,16 @@ function DecisionBlock({
       <div className="flex flex-wrap items-center gap-2">
         <CheckCircle2 className="w-4 h-4 shrink-0 text-brand-500" />
         <span className="text-sm font-semibold text-foreground">
-          Signed off as {tierName(reviewSelection(v))}
+          {v.stage === 'admin_approved' ? 'Admin approved' : 'Signed off as'} {tierName(reviewSelection(v))}
         </span>
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${getTierBadgeColor(v.finalTier || '')}`}>
           {tierName(reviewSelection(v))}
         </span>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {v.verifiedBy ? `by ${v.verifiedBy}` : 'by a mentor'}
+        {v.stage === 'admin_approved'
+          ? 'This is the finalized grade. A mentor must request an admin-approved change.'
+          : (v.verifiedBy ? `by ${v.verifiedBy}` : 'by a mentor')}
         {v.verifiedAt && ` · ${new Date(v.verifiedAt).toLocaleDateString()}`}
       </p>
       {v.overrideReason && <OverrideNote v={v} tierName={tierName} />}

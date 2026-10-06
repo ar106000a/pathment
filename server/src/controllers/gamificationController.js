@@ -230,7 +230,7 @@ exports.getUserChallenges = catchAsync(async (req, res) => {
         as: 'challenge'
       }
     ],
-    order: [['createdAt', 'DESC']]
+    order: [['enrolledAt', 'DESC']]
   });
 
   res.status(200).json(

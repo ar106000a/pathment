@@ -38,6 +38,7 @@ const BAND_OPTS = [
 ];
 
 export default function MentorScores() {
+  // Standing and cohort clans share this scoreboard; scoring is clan-scoped on the server.
   const router = useRouter();
   const { clans, activeClanId } = useClan();
 

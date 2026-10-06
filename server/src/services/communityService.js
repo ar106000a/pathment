@@ -1,6 +1,6 @@
 const { Op } = require('sequelize');
 const { models } = require('../db');
-const { ValidationError, AuthorizationError, NotFoundError } = require('../utils/errors/errorTypes');
+const { ValidationError, AuthorizationError, NotFoundError, ClanFrozenError } = require('../utils/errors/errorTypes');
 const spaceService = require('./communitySpaceService');
 const gamificationService = require('./gamificationService');
 const notificationOrchestrator = require('./notificationOrchestrator');
@@ -39,6 +39,12 @@ class CommunityService {
   async _requireAccess(user, scopeType, scopeId) {
     const ctx = await spaceService.getSpaceContext(user, scopeType, scopeId);
     if (!ctx) throw new AuthorizationError('You are not a member of this space');
+    return ctx;
+  }
+
+  async _requireWritableAccess(user, scopeType, scopeId) {
+    const ctx = await this._requireAccess(user, scopeType, scopeId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     return ctx;
   }
 
@@ -302,7 +308,7 @@ class CommunityService {
     const { type, scopeType, scopeId, title, body, toId, tags, linkUrl, attachments, mentionedUserIds } = data;
     if (!body || !body.trim()) throw new ValidationError('Say something');
     const resolvedType = POST_TYPES.includes(type) ? type : 'discussion';
-    await this._requireAccess(user, scopeType, scopeId || null);
+    await this._requireWritableAccess(user, scopeType, scopeId || null);
 
     const mentions = await this._sanitizeMentions(scopeType, scopeId, mentionedUserIds);
 
@@ -348,7 +354,8 @@ class CommunityService {
   }
 
   async updatePost(user, postId, data) {
-    const { post } = await this._loadPostWithAccess(user, postId);
+    const { post, ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     if (post.authorId !== user.id) throw new AuthorizationError('You can only edit your own posts');
     const patch = { editedAt: new Date() };
     if (typeof data.body === 'string') {
@@ -364,6 +371,7 @@ class CommunityService {
 
   async deletePost(user, postId) {
     const { post, ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     if (!this._canModerate(ctx, user, post.authorId)) throw new AuthorizationError('Not allowed');
     await post.update({ deletedAt: new Date() });
     return { deleted: true };
@@ -371,6 +379,7 @@ class CommunityService {
 
   async setPinned(user, postId, pinned) {
     const { post, ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     if (!ctx.isModerator) throw new AuthorizationError('Only space moderators can pin posts');
     await post.update(pinned ? { pinnedAt: new Date(), pinnedBy: user.id } : { pinnedAt: null, pinnedBy: null });
     return { pinned: Boolean(pinned) };
@@ -378,7 +387,8 @@ class CommunityService {
 
   async toggleReaction(user, postId, type) {
     if (!REACTION_TYPES.includes(type)) throw new ValidationError('Invalid reaction type');
-    await this._loadPostWithAccess(user, postId);
+    const { ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     const existing = await models.CommunityReaction.findOne({ where: { postId, userId: user.id, type } });
     if (existing) { await existing.destroy(); return { reacted: false }; }
     await models.CommunityReaction.create({ postId, userId: user.id, type });
@@ -408,7 +418,8 @@ class CommunityService {
 
   async addComment(user, postId, { body, parentId, mentionedUserIds }) {
     if (!body || !body.trim()) throw new ValidationError('Write a reply');
-    const { post } = await this._loadPostWithAccess(user, postId);
+    const { post, ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
 
     let parent = null;
     if (parentId) {
@@ -442,6 +453,8 @@ class CommunityService {
     const comment = await models.CommunityComment.findOne({ where: { id: commentId, deletedAt: null } });
     if (!comment) throw new NotFoundError('Comment not found');
     if (comment.authorId !== user.id) throw new AuthorizationError('You can only edit your own replies');
+    const { ctx } = await this._loadPostWithAccess(user, comment.postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     await comment.update({ body: body.trim(), editedAt: new Date() });
     return comment;
   }
@@ -450,6 +463,7 @@ class CommunityService {
     const comment = await models.CommunityComment.findOne({ where: { id: commentId, deletedAt: null } });
     if (!comment) throw new NotFoundError('Comment not found');
     const { post, ctx } = await this._loadPostWithAccess(user, comment.postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     if (!this._canModerate(ctx, user, comment.authorId)) throw new AuthorizationError('Not allowed');
     await comment.update({ deletedAt: new Date() });
     await post.decrement('commentCount');
@@ -460,6 +474,7 @@ class CommunityService {
   /** Mark a comment as the accepted answer on a question (author or moderator). */
   async acceptAnswer(user, postId, commentId) {
     const { post, ctx } = await this._loadPostWithAccess(user, postId);
+    if (ctx.readOnly) throw new ClanFrozenError();
     if (post.type !== 'question') throw new ValidationError('Only questions can have an accepted answer');
     if (post.authorId !== user.id && !ctx.isModerator) throw new AuthorizationError('Only the asker or a moderator can accept an answer');
     const comment = await models.CommunityComment.findOne({ where: { id: commentId, postId, deletedAt: null } });

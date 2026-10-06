@@ -16,6 +16,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       field: 'mentee_id'
     },
+    clanId: { type: DataTypes.UUID, allowNull: true, field: 'clan_id' },
     assignedTaskId: {
       type: DataTypes.UUID,
       allowNull: true,

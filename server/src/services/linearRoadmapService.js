@@ -8,6 +8,7 @@ const authzService = require('./authzService');
 const taskService = require('./taskService');
 const { pointsForDifficulty } = require('../config/points');
 const { resolveMenteeClanId, listMenteeClans, clanScopedWhere } = require('./menteeClanScope');
+const clanLifecycleService = require('./clanLifecycleService');
 
 /**
  * linearRoadmapService - the new design's linear roadmap flow for mentors:
@@ -507,13 +508,14 @@ class LinearRoadmapService {
       const templateSteps = await this.getSteps(p.roadmapId);
       const templateStepIds = templateSteps.map((s) => s.id);
 
-      // Fetch all non-cancelled AssignedTasks for this mentee and enrollment
-      const assignedTasks = p.enrollmentId
+      // Standing progress has enrollmentId=null — scope by clanId so those
+      // roadmaps aren't empty. Prefer clanId over enrollment so cohort and
+      // standing never mix when a mentee is in both.
+      const assignedTasks = (p.clanId || p.enrollmentId)
         ? await models.AssignedTask.findAll({
             where: {
               menteeId,
-              enrollmentId: p.enrollmentId,
-              ...(p.clanId ? { clanId: p.clanId } : {}),
+              ...(p.clanId ? { clanId: p.clanId } : { enrollmentId: p.enrollmentId }),
               status: { [Op.ne]: 'cancelled' },
             },
             attributes: ['id', 'roadmapTaskId', 'status', 'dueDate', 'completedAt', 'pointsAwarded', 'pointsBase', 'isCustomTask', 'assignedAt', 'titleOverride', 'descriptionOverride', 'deliverableOverride', 'acceptanceCriteriaOverride', 'resourcesOverride'],
@@ -651,13 +653,11 @@ class LinearRoadmapService {
       }
 
       if (!mentorCheckInDate && models.CohortReviewSession) {
-        const clanMember = models.ClanMembership
-          ? await models.ClanMembership.findOne({ where: { userId: menteeId, status: 'active' } })
-          : null;
-        const clanId = clanMember?.clanId || null;
+        // Use the same resolved clan as this roadmap view (not first membership).
+        const sessionClanId = resolved || p.clanId || null;
 
-        const sessionWhere = clanId
-          ? { clanId, [Op.or]: [{ status: 'in_progress' }, { scheduledAt: { [Op.gte]: new Date() } }] }
+        const sessionWhere = sessionClanId
+          ? { clanId: sessionClanId, [Op.or]: [{ status: 'in_progress' }, { scheduledAt: { [Op.gte]: new Date() } }] }
           : { [Op.or]: [{ status: 'in_progress' }, { scheduledAt: { [Op.gte]: new Date() } }] };
 
         const nextCohortSession = await models.CohortReviewSession.findOne({
@@ -777,9 +777,10 @@ class LinearRoadmapService {
   }
 
   /** Mentee IDs that already have this roadmap assigned (a RoadmapProgress row). */
-  async getAssignees(roadmapId) {
+  async getAssignees(roadmapId, clanId = null) {
     // Lineage-aware (see getMenteeStepStatus): a mentee who has the org base or a
     // sibling import of this roadmap already "has" it, so don't offer to re-assign.
+    // Clan-scope so cohort progress does not mark someone "already assigned" in Standee.
     const roadmap = await models.Roadmap.findByPk(roadmapId, { attributes: ['id', 'importedFrom'] });
     const lineageRoot = (roadmap && roadmap.importedFrom) || roadmapId;
     const siblings = await models.Roadmap.findAll({
@@ -788,7 +789,10 @@ class LinearRoadmapService {
     });
     const siblingIds = siblings.map((s) => s.id);
     if (!siblingIds.includes(roadmapId)) siblingIds.push(roadmapId);
-    const rows = await models.RoadmapProgress.findAll({ where: { roadmapId: { [Op.in]: siblingIds } }, attributes: ['menteeId'] });
+    const rows = await models.RoadmapProgress.findAll({
+      where: { roadmapId: { [Op.in]: siblingIds }, ...(clanId ? { clanId } : {}) },
+      attributes: ['menteeId'],
+    });
     return [...new Set(rows.map((r) => r.menteeId))];
   }
 
@@ -828,15 +832,27 @@ class LinearRoadmapService {
     }
 
     const resolvedClanId = await resolveMenteeClanId(menteeId, clanId, { actorId: mentorId });
+    await clanLifecycleService.assertClanWritable(resolvedClanId);
 
-    let enrollment = await this._activeEnrollment(menteeId);
-    if (!enrollment) {
-      // Self-heal: a clan-placed mentee may not have an enrollment yet. Create
-      // one in the roadmap's program rather than failing the assignment.
-      if (!roadmap?.programId) throw new ValidationError('Mentee has no enrollment to attach this work to');
-      enrollment = await models.Enrollment.create({
-        menteeId, programId: roadmap.programId, status: 'active', enrolledAt: new Date()
-      });
+    const actualClan = resolvedClanId && await models.Clan.findByPk(resolvedClanId);
+    // Standing mirrors cohort assign (same steps/progress), but never attaches a
+    // program enrollment — that would mix Standee work into cohort stats.
+    let enrollmentId = null;
+    if (actualClan?.kind === 'standing') {
+      enrollmentId = null;
+    } else {
+      let enrollment = actualClan
+        ? await models.Enrollment.findOne({ where: { menteeId, programId: actualClan.programId } })
+        : await this._activeEnrollment(menteeId);
+      if (!enrollment) {
+        // Self-heal: a clan-placed mentee may not have an enrollment yet. Create
+        // one in the roadmap's program rather than failing the assignment.
+        if (!roadmap?.programId) throw new ValidationError('Mentee has no enrollment to attach this work to');
+        enrollment = await models.Enrollment.create({
+          menteeId, programId: actualClan?.programId || roadmap.programId, status: 'active', enrolledAt: new Date()
+        });
+      }
+      enrollmentId = enrollment.id;
     }
 
     return sequelize.transaction(async (transaction) => {
@@ -847,13 +863,13 @@ class LinearRoadmapService {
         // Don't drag progress backwards if they're already further along.
         progress.currentStep = Math.min(progress.currentStep ?? idx, idx);
         progress.completed = false;
-        progress.enrollmentId = enrollment.id;
+        progress.enrollmentId = enrollmentId;
         if (slot) progress.slot = slot;
         if (resolvedClanId) progress.clanId = resolvedClanId;
         await progress.save({ transaction });
       } else {
         progress = await models.RoadmapProgress.create({
-          roadmapId, menteeId, enrollmentId: enrollment.id, currentStep: idx, completed: false, slot: slot || null, clanId: resolvedClanId || null
+          roadmapId, menteeId, enrollmentId, currentStep: idx, completed: false, slot: slot || null, clanId: resolvedClanId || null
         }, { transaction });
       }
       return progress;
@@ -863,9 +879,11 @@ class LinearRoadmapService {
       const overridesById = stepOverrides && typeof stepOverrides === 'object' ? stepOverrides : null;
       for (const i of indexes) {
         const ov = overridesById ? overridesById[steps[i].id] : null;
-        await this._assignStep(steps[i], menteeId, mentorId, enrollment.id, resolvedDue, ov, resolvedClanId);
+        await this._assignStep(steps[i], menteeId, mentorId, enrollmentId, resolvedDue, ov, resolvedClanId);
       }
-      await taskService.updateEnrollmentTaskStats(enrollment.id).catch(e => console.error('[Roadmap] progress update failed:', e.message));
+      if (enrollmentId) {
+        await taskService.updateEnrollmentTaskStats(enrollmentId).catch(e => console.error('[Roadmap] progress update failed:', e.message));
+      }
       return progress;
     });
   }
@@ -885,7 +903,7 @@ class LinearRoadmapService {
    * step (same title) in ANY roadmap of the same lineage: the org base + every
    * local import of it. Reports the most-advanced status across copies.
    */
-  async getMenteeStepStatus(roadmapId, menteeId) {
+  async getMenteeStepStatus(roadmapId, menteeId, clanId = null) {
     const steps = await this.getSteps(roadmapId);
     const roadmap = await models.Roadmap.findByPk(roadmapId, { attributes: ['id', 'importedFrom'] });
 
@@ -909,9 +927,23 @@ class LinearRoadmapService {
     const titleByTaskId = new Map(lineageSteps.map((t) => [t.id, norm(t.title)]));
     const lineageTaskIds = [...titleByTaskId.keys()];
 
+    // Scope to the active clan when present so completed-clan assignments do not
+    // mark steps as already assigned inside a standing clan. Use clanScopedWhere
+    // so single-clan mentees still see legacy rows with null clanId (same as
+    // getMenteeRoadmaps / task lists).
+    const memberships = await listMenteeClans(menteeId);
+    const assignedWhere = clanScopedWhere(
+      {
+        roadmapTaskId: { [Op.in]: lineageTaskIds },
+        menteeId,
+        status: { [Op.ne]: 'cancelled' },
+      },
+      clanId,
+      memberships.length,
+    );
     const assigned = lineageTaskIds.length
       ? await models.AssignedTask.findAll({
-        where: { roadmapTaskId: { [Op.in]: lineageTaskIds }, menteeId, status: { [Op.ne]: 'cancelled' } },
+        where: assignedWhere,
         attributes: ['roadmapTaskId', 'status'],
       })
       : [];
@@ -992,23 +1024,30 @@ class LinearRoadmapService {
   async _startNextRoadmap(menteeId, nextId, prevAssignment, slotId = null) {
     const steps = await this.getSteps(nextId);
     if (!steps.length) return false;
-    const enrollment = await this._activeEnrollment(menteeId);
+    const clan = prevAssignment?.clanId && await models.Clan.findByPk(prevAssignment.clanId);
+    // Standing keeps enrollment null (same as assignToMentee); cohort keeps the prior enrollment.
+    const enrollmentId = clan?.kind === 'standing'
+      ? null
+      : (prevAssignment?.enrollmentId
+        ? (await models.Enrollment.findByPk(prevAssignment.enrollmentId))?.id
+        : (await this._activeEnrollment(menteeId))?.id) || null;
     const existing = await models.RoadmapProgress.findOne({
       where: { roadmapId: nextId, menteeId, ...(prevAssignment?.clanId ? { clanId: prevAssignment.clanId } : {}) }
     });
     if (existing && !existing.completed) return false; // already active - don't disturb
     if (existing) {
       existing.currentStep = 0; existing.completed = false; if (slotId) existing.slot = slotId;
-      if (enrollment) existing.enrollmentId = enrollment.id;
+      existing.enrollmentId = enrollmentId;
       if (prevAssignment?.clanId) existing.clanId = prevAssignment.clanId;
       await existing.save();
     } else {
       await models.RoadmapProgress.create({
-        roadmapId: nextId, menteeId, enrollmentId: enrollment?.id || null, currentStep: 0, slot: slotId, completed: false, clanId: prevAssignment?.clanId || null
+        roadmapId: nextId, menteeId, enrollmentId, currentStep: 0, slot: slotId, completed: false, clanId: prevAssignment?.clanId || null
       });
     }
-    if (steps[0] && enrollment && prevAssignment) {
-      await this._assignStep(steps[0], menteeId, prevAssignment.mentorId, enrollment.id, null, null, prevAssignment.clanId);
+    // Standing and cohort both assign the next step when we have a prior mentor.
+    if (steps[0] && prevAssignment) {
+      await this._assignStep(steps[0], menteeId, prevAssignment.mentorId, enrollmentId, null, null, prevAssignment.clanId);
     }
     return true;
   }
@@ -1055,7 +1094,9 @@ class LinearRoadmapService {
     // 1) Reusable roadmap-level links take precedence.
     const links = await models.RoadmapLink.findAll({ where: { fromRoadmapId: completedRoadmapId }, order: [['position', 'ASC']] });
     if (links.length) {
-      const enrollment = await this._activeEnrollment(menteeId);
+      const enrollment = prevAssignment?.clanId
+        ? (prevAssignment.enrollmentId ? await models.Enrollment.findByPk(prevAssignment.enrollmentId) : null)
+        : await this._activeEnrollment(menteeId);
       const autoOn = enrollment ? enrollment.autoAdvanceRoadmaps !== false : true;
       if (links.length === 1 && autoOn) {
         const nextId = links[0].toRoadmapId;
@@ -1082,19 +1123,21 @@ class LinearRoadmapService {
   }
 
   /** Start the head roadmap of a slot's chain (used when a roadmap slot is filled). */
-  async startChainHead(mentorId, menteeId, slotId, roadmapChain, startStep = 0) {
+  async startChainHead(mentorId, menteeId, slotId, roadmapChain, startStep = 0, clanId = null) {
     if (!Array.isArray(roadmapChain) || !roadmapChain.length) return null;
     const headId = roadmapChain[0];
-    const existing = await models.RoadmapProgress.findOne({ where: { roadmapId: headId, menteeId } });
+    const existing = await models.RoadmapProgress.findOne({
+      where: { roadmapId: headId, menteeId, ...(clanId ? { clanId } : {}) },
+    });
     if (existing) return null; // already started
-    return this.assignToMentee(mentorId, headId, menteeId, Math.max(0, Number(startStep) || 0), slotId);
+    return this.assignToMentee(mentorId, headId, menteeId, Math.max(0, Number(startStep) || 0), slotId, null, null, null, clanId);
   }
 
-  async bulkAssign(mentorId, roadmapId, menteeIds = [], startStep = 0, dueDate = null, stepIndexes = null, stepOverrides = null) {
+  async bulkAssign(mentorId, roadmapId, menteeIds = [], startStep = 0, dueDate = null, stepIndexes = null, stepOverrides = null, clanId = null) {
     const results = [];
     for (const menteeId of menteeIds) {
       try {
-        await this.assignToMentee(mentorId, roadmapId, menteeId, startStep, null, dueDate, stepIndexes, stepOverrides);
+        await this.assignToMentee(mentorId, roadmapId, menteeId, startStep, null, dueDate, stepIndexes, stepOverrides, clanId);
         results.push({ menteeId, ok: true });
       } catch (error) {
         results.push({ menteeId, ok: false, error: error.message });
@@ -1120,7 +1163,21 @@ class LinearRoadmapService {
     const task = await models.RoadmapTask.findByPk(roadmapTaskId, { attributes: ['id', 'roadmapId'] });
     if (!task || !task.roadmapId) return null;
 
-    const progress = await models.RoadmapProgress.findOne({ where: { roadmapId: task.roadmapId, menteeId } });
+    const prevAssignment = await models.AssignedTask.findOne({
+      where: { roadmapTaskId, menteeId, status: { [Op.ne]: 'cancelled' } },
+      attributes: ['mentorId', 'enrollmentId', 'clanId'],
+      order: [['assignedAt', 'DESC']],
+    });
+    if (!prevAssignment) return null;
+
+    // Scope progress to the assignment's clan so standing never advances cohort progress.
+    const progress = await models.RoadmapProgress.findOne({
+      where: {
+        roadmapId: task.roadmapId,
+        menteeId,
+        ...(prevAssignment.clanId ? { clanId: prevAssignment.clanId } : {}),
+      },
+    });
     if (!progress) return null;
 
     const steps = await this.getSteps(task.roadmapId);
@@ -1130,12 +1187,6 @@ class LinearRoadmapService {
     const nextIdx = currentIdx + 1;
     // Last step: completion + cross-roadmap chaining wait for approval.
     if (nextIdx >= steps.length) return { atLastStep: true };
-
-    const prevAssignment = await models.AssignedTask.findOne({
-      where: { roadmapTaskId, menteeId },
-      attributes: ['mentorId', 'enrollmentId', 'clanId']
-    });
-    if (!prevAssignment) return null;
 
     await this._assignStep(steps[nextIdx], menteeId, prevAssignment.mentorId, prevAssignment.enrollmentId, null, null, prevAssignment.clanId);
     // Move the pointer forward (approval keeps it here — idempotent).
@@ -1147,18 +1198,25 @@ class LinearRoadmapService {
     const task = await models.RoadmapTask.findByPk(roadmapTaskId, { attributes: ['id', 'roadmapId'] });
     if (!task || !task.roadmapId) return null;
 
-    const progress = await models.RoadmapProgress.findOne({ where: { roadmapId: task.roadmapId, menteeId } });
+    // Mentor of the completed assignment - reused for the next step / chained roadmap.
+    const prevAssignment = await models.AssignedTask.findOne({
+      where: { roadmapTaskId, menteeId, status: { [Op.ne]: 'cancelled' } },
+      attributes: ['mentorId', 'enrollmentId', 'clanId'],
+      order: [['assignedAt', 'DESC']],
+    });
+
+    const progress = await models.RoadmapProgress.findOne({
+      where: {
+        roadmapId: task.roadmapId,
+        menteeId,
+        ...(prevAssignment?.clanId ? { clanId: prevAssignment.clanId } : {}),
+      },
+    });
     if (!progress) return null;
 
     const steps = await this.getSteps(task.roadmapId);
     const currentIdx = steps.findIndex((s) => s.id === roadmapTaskId);
     if (currentIdx === -1) return null;
-
-    // Mentor of the completed assignment - reused for the next step / chained roadmap.
-    const prevAssignment = await models.AssignedTask.findOne({
-      where: { roadmapTaskId, menteeId },
-      attributes: ['mentorId', 'enrollmentId', 'clanId']
-    });
 
     const nextIdx = currentIdx + 1;
     if (nextIdx >= steps.length) {

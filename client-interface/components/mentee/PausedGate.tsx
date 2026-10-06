@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { PauseCircle, Mail, MessageCircle, Loader2 } from 'lucide-react';
 import { menteeApi } from '@/lib/services/mentee-api';
+import { useClan } from '@/lib/context/ClanContext';
 
 interface PausedClan {
   clanId: string;
@@ -21,6 +22,8 @@ interface PausedClan {
  * their mentor side; only /mentee/* is blocked.
  */
 export function PausedGate({ children }: { children: React.ReactNode }) {
+  const { clans: availableClans, activeClanId } = useClan();
+  const activeClan = availableClans.find(c => c.id === activeClanId);
   const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(false);
   const [clans, setClans] = useState<PausedClan[]>([]);
@@ -46,11 +49,12 @@ export function PausedGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!paused) return <>{children}</>;
+  const selectedClans = activeClan ? clans.filter(c => c.clanId === activeClan.id) : clans;
+  if (!paused || activeClan?.frozenAt || (activeClan && !selectedClans.length)) return <>{children}</>;
 
-  const mentors = clans.flatMap((c) => c.mentors);
+  const mentors = selectedClans.flatMap((c) => c.mentors);
   const primary = mentors[0] || null;
-  const clan = clans[0] || null;
+  const clan = selectedClans[0] || null;
 
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-4">

@@ -15,7 +15,7 @@ const uploadGiftImage = catchAsync(async (req, res) => {
 });
 
 const overview = catchAsync(async (req, res) => {
-  const data = await rewardsService.overview(req.user);
+  const data = await rewardsService.overview(req.user, req.portal?.role);
   res.status(200).json(successResponse('Rewards retrieved', data));
 });
 

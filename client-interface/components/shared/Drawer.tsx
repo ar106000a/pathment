@@ -16,6 +16,8 @@ interface DrawerProps {
   subtitle?: string;
   /** Panel width. sm = max-w-md, md = max-w-lg, lg = max-w-xl. */
   width?: "sm" | "md" | "lg";
+  /** Override stacking when nested above another sheet (e.g. notification drawer). */
+  zClass?: string;
   /** Sticky footer (usually the Cancel / Save actions). */
   footer?: ReactNode | ((dismiss: () => void) => ReactNode);
   children: ReactNode;
@@ -38,6 +40,7 @@ export function Drawer({
   title,
   subtitle,
   width = "md",
+  zClass = "z-50",
   footer,
   children,
 }: DrawerProps) {
@@ -156,7 +159,7 @@ export function Drawer({
   if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className={`fixed inset-0 ${zClass} flex justify-end`}>
       <div
         className={`absolute inset-0 bg-black/40 dark:bg-black/70 transition-opacity duration-[250ms] motion-reduce:transition-none ease-out ${shown ? "opacity-100" : "opacity-0"}`}
         onClick={dismiss}

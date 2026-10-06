@@ -29,6 +29,7 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
   const [aiRanAt, setAiRanAt] = useState<string | null>(null);
   const [runningAI, setRunningAI] = useState(false);
   const [failedCount, setFailedCount] = useState(0);
+  const [skippedCount, setSkippedCount] = useState(0);
   const [aiProgressCount, setAiProgressCount] = useState(0);
   const [aiTotalCount, setAiTotalCount] = useState(0);
   const [aiEvaluationRunId, setAiEvaluationRunId] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
       setAiProgressCount(data.completed);
       setAiTotalCount(data.total);
 
-      if (data.result._failed) return;
+      if (data.result._failed || data.result._skipped) return;
       setAiResults(prev => {
         const index = prev.findIndex(r => r.mentee_id === data.result.mentee_id);
         if (index > -1) {
@@ -60,11 +61,12 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
       callbacks.current.onSingleProgress?.(data.result);
     };
 
-    const handleComplete = (data: { runId: string; results: any[]; ranAt: string; failed?: number }) => {
+    const handleComplete = (data: { runId: string; results: any[]; ranAt: string; failed?: number; skipped?: number }) => {
       if (data.runId !== aiEvaluationRunId) return;
       setAiResults(prev => mergeResults(prev, data.results || []));
       setAiRanAt(data.ranAt);
       setFailedCount(data.failed ?? 0);
+      setSkippedCount(data.skipped ?? 0);
       setRunningAI(false);
       setAiEvaluationRunId(null);
 
@@ -90,6 +92,7 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
           const resultsList = payload.data ?? res.data ?? [];
 
           setFailedCount(payload.failed ?? res.failed ?? 0);
+          setSkippedCount(payload.skipped ?? res.skipped ?? 0);
           setAiProgressCount(completed);
           setAiTotalCount(total);
 
@@ -122,24 +125,30 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
     };
   }, [aiEvaluationRunId, templateId]);
 
-  const runAIEvaluation = useCallback(async (targetTemplateId?: string) => {
+  const runAIEvaluation = useCallback(async (targetTemplateId?: string, menteeIds?: string[]) => {
     const idToUse = targetTemplateId || templateId;
     if (!idToUse) return;
 
     try {
       setRunningAI(true);
       setFailedCount(0);
+      setSkippedCount(0);
       setAiProgressCount(0);
       setAiTotalCount(0);
 
-      const res: any = await certificatesApi.runAIEvaluation(idToUse);
+      const res: any = await certificatesApi.runAIEvaluation(idToUse, undefined, menteeIds);
       const runId = res.runId || res.data?.runId;
       const total = res.total ?? res.data?.total ?? 0;
+      const skipped = res.skipped ?? res.data?.skipped ?? { total: 0 };
 
       if (res.success && runId) {
         setAiEvaluationRunId(runId);
         setAiTotalCount(total);
         toast.info(`AI evaluation started for ${total} mentees...`);
+      } else if (res.success) {
+        setRunningAI(false);
+        setSkippedCount(skipped.total ?? 0);
+        toast.info(res.message || 'There are no unreviewed mentees to evaluate.');
       }
     } catch (err: any) {
       toast.error(err.message || 'AI evaluation failed. Check AI connection in Settings.');
@@ -157,6 +166,7 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
         if (statusRes.success && isMounted) {
           const payload = statusRes.data?.data ? statusRes.data : statusRes;
           setFailedCount(payload.failed ?? statusRes.failed ?? 0);
+          setSkippedCount(payload.skipped ?? statusRes.skipped ?? 0);
           const activeRunId = payload.runId || statusRes.runId;
           const isDone = payload.isDone ?? statusRes.isDone ?? true;
           const completed = payload.completed ?? statusRes.completed ?? 0;
@@ -192,6 +202,7 @@ export function useAIEvaluationProgress(options: UseAIEvaluationProgressOptions 
     setAiRanAt,
     runningAI,
     failedCount,
+    skippedCount,
     setRunningAI,
     aiProgressCount,
     setAiProgressCount,

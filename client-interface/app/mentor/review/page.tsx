@@ -14,7 +14,7 @@ import {
 import Link from 'next/link';
 import { useMentorCohort, useMentorApprovals, type CohortMentee, type CohortMomentum, type CohortRisk, type ApprovalItem } from '@/lib/hooks/mentor';
 import { useAuth } from '@/lib/context/AuthContext';
-import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
+import { useClan, ALL_CLANS, isHistoricalCohortClan } from '@/lib/context/ClanContext';
 import { mentorApi } from '@/lib/services/mentor-api';
 import { taskApi } from '@/lib/services/task-api';
 import { submissionService } from '@/lib/services/submissionService';
@@ -89,7 +89,9 @@ export default function CohortReview() {
   // session on the same clan). Single-clan mentors never see the picker and the
   // server resolves their one clan automatically.
   const effectiveClanId = activeClanId !== ALL_CLANS ? activeClanId : (clans[0]?.id ?? null);
-  const activeClanName = clans.find((c) => c.id === effectiveClanId)?.name ?? null;
+  const activeClan = clans.find((c) => c.id === effectiveClanId) ?? null;
+  const activeClanName = activeClan?.name ?? null;
+  const historical = isHistoricalCohortClan(activeClan);
   useEffect(() => {
     if (clans.length >= 2 && activeClanId === ALL_CLANS && clans[0]?.id) {
       setActiveClanId(clans[0].id);
@@ -244,7 +246,8 @@ export default function CohortReview() {
     (session?.entries || []).forEach((e) => { m[e.menteeId] = e; });
     return m;
   }, [session]);
-  const editable = session?.status === 'in_progress' || session?.status === 'draft';
+  const editable = !historical && (session?.status === 'in_progress' || session?.status === 'draft');
+  const HISTORICAL_TITLE = 'Completed programs are read-only';
   const isDraft = session?.status === 'draft';
 
   // "Last meeting" = the most recent attendance STRICTLY BEFORE the session being
@@ -562,22 +565,24 @@ export default function CohortReview() {
   };
 
   const approve = useCallback(async (item: ApprovalItem) => {
+    if (historical) return;
     try {
       setBusy(item.submissionId);
       await submissionService.reviewSubmission(item.submissionId, { rating: 5, feedbackText: 'Approved.', isApproved: true, decision: 'approved' });
       toast.success('Approved - marked complete');
       await refresh();
     } catch { toast.error('Could not approve'); } finally { setBusy(null); }
-  }, [refresh]);
+  }, [refresh, historical]);
 
   const requestChanges = useCallback(async (item: ApprovalItem) => {
+    if (historical) return;
     try {
       setBusy(item.submissionId);
       await submissionService.reviewSubmission(item.submissionId, { rating: 3, feedbackText: 'Please take another pass.', isApproved: false, decision: 'changes', revisionNotes: 'Please take another pass.' });
       toast.success('Changes requested - sent back to the mentee');
       await refresh();
     } catch { toast.error('Could not update'); } finally { setBusy(null); }
-  }, [refresh]);
+  }, [refresh, historical]);
 
   const mark = useCallback((status: Attendance) => {
     if (!mentee || !editable) return;
@@ -743,14 +748,22 @@ export default function CohortReview() {
       // edit / extension / history) — its inputs own the keyboard.
       if (reviewing || assigning || taskDetail || extReview || historyOpen || attOpen) return;
       const k = e.key.toLowerCase();
-      if (k === 't') { e.preventDefault(); setAssigning(true); return; }
+      if (k === 't') {
+        e.preventDefault();
+        if (historical) {
+          toast.error('This cohort is historical. An admin must reopen the program before assigning tasks.');
+          return;
+        }
+        setAssigning(true);
+        return;
+      }
       if (k === 'arrowright' || k === 'l') { e.preventDefault(); go(1); }
       else if (k === 'arrowleft' || k === 'h') { e.preventDefault(); go(-1); }
       else if (k === 's') { e.preventDefault(); skip(); }
       else if (k === 'j' || k === 'arrowdown') { e.preventDefault(); setFocus((f) => Math.min(pending.length - 1, f + 1)); }
       else if (k === 'k' || k === 'arrowup') { e.preventDefault(); setFocus((f) => Math.max(0, f - 1)); }
-      else if (k === 'a' && pending[focus]) { e.preventDefault(); approve(pending[focus]); }
-      else if (k === 'c' && pending[focus]) { e.preventDefault(); requestChanges(pending[focus]); }
+      else if (k === 'a' && pending[focus]) { e.preventDefault(); if (!historical) approve(pending[focus]); }
+      else if (k === 'c' && pending[focus]) { e.preventDefault(); if (!historical) requestChanges(pending[focus]); }
       else if (k === 'r' && pending[focus]) { e.preventDefault(); setReviewing(pending[focus]); }
       else if (k === 'p') { e.preventDefault(); mark('present'); }
       else if (k === 'x') { e.preventDefault(); mark('absent'); }
@@ -799,9 +812,9 @@ export default function CohortReview() {
           <p className="text-slate-600 text-xs sm:text-sm mt-0.5">{idx + 1} of {cohort.length} · {session?.title || 'review each mentee, then finish'}</p>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          <button onClick={() => setScheduleOpen(true)} className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border border-slate-200 text-slate-700 text-xs sm:text-sm hover:bg-slate-50 inline-flex items-center gap-1" title="Recurring reviews"><CalendarClock className="w-3.5 h-3.5 sm:w-4 sm:h-4" /><span className="hidden sm:inline">Schedule</span></button>
+          <button onClick={() => setScheduleOpen(true)} disabled={historical} title={historical ? HISTORICAL_TITLE : 'Recurring reviews'} className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border border-slate-200 text-slate-700 text-xs sm:text-sm hover:bg-slate-50 inline-flex items-center gap-1 disabled:opacity-50"><CalendarClock className="w-3.5 h-3.5 sm:w-4 sm:h-4" /><span className="hidden sm:inline">Schedule</span></button>
           <button onClick={openHistory} className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border border-slate-200 text-slate-700 text-xs sm:text-sm hover:bg-slate-50 inline-flex items-center gap-1" title="Past reviews"><History className="w-3.5 h-3.5 sm:w-4 sm:h-4" /><span className="hidden sm:inline">History</span></button>
-          <button onClick={() => setAssigning(true)} className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border border-slate-200 text-slate-700 text-xs sm:text-sm hover:bg-slate-50 inline-flex items-center gap-1" title="Assign a task (t)"><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />Assign task</button>
+          <button onClick={() => setAssigning(true)} disabled={historical} title={historical ? 'Completed programs are read-only' : 'Assign a task (t)'} className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border border-slate-200 text-slate-700 text-xs sm:text-sm hover:bg-slate-50 inline-flex items-center gap-1 disabled:opacity-50"><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />Assign task</button>
           <button onClick={() => setShowHelp(true)} className="p-1.5 sm:p-2 rounded-lg text-slate-400 hover:bg-slate-100 hidden sm:inline-flex" title="Shortcuts"><Keyboard className="w-4 h-4" /></button>
           <div className="hidden sm:flex items-center gap-1.5 ml-1">
             <button onClick={() => go(-1)} disabled={idx === 0} className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-40 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4" />Prev</button>
@@ -851,7 +864,7 @@ export default function CohortReview() {
 
       {/* Live video (Jitsi): start the room, auto-attendance, contribution points. */}
       {session && (session.id || isDraft) && (
-        <ReviewMeetingPanel sessionId={session.id} isDraft={isDraft} ensureSession={ensureSession} onAttendanceSync={syncMeetingAttendance} onEnded={loadSession} />
+        <ReviewMeetingPanel sessionId={session.id} isDraft={isDraft} ensureSession={ensureSession} onAttendanceSync={syncMeetingAttendance} onEnded={loadSession} readOnly={historical} />
       )}
 
       {/* Attendance Strip */}
@@ -862,6 +875,7 @@ export default function CohortReview() {
         onSelectMentee={selectMentee}
         onSaveAttendance={patchMultipleEntries}
         isSaving={isSavingAttendance}
+        readOnly={historical}
       />
 
       {deferred.size > 0 && (
@@ -925,15 +939,15 @@ export default function CohortReview() {
               </div>
 
               <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto border-t sm:border-t-0 border-slate-100 pt-2 sm:pt-0 w-full sm:w-auto justify-end">
-                <NudgeButton menteeId={mentee!.id} menteeName={mentee!.name} variant="icon" />
+                <NudgeButton menteeId={mentee!.id} menteeName={mentee!.name} variant="icon" disabled={historical} />
                 {/* Reviewing someone is exactly when you realise they'd do better
                     with another mentor — so the move lives here too, not only on
                     the profile. */}
-                <MoveMenteeButton menteeId={mentee!.id} menteeName={mentee!.name} variant="icon" />
+                <MoveMenteeButton menteeId={mentee!.id} menteeName={mentee!.name} variant="icon" disabled={historical} />
                 <button
                   onClick={pauseCurrent}
-                  disabled={pausing}
-                  title="Pause this mentee (stopped attending)"
+                  disabled={pausing || historical}
+                  title={historical ? HISTORICAL_TITLE : 'Pause this mentee (stopped attending)'}
                   className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:opacity-50"
                 >
                   <PauseCircle className="w-4 h-4" />
@@ -996,8 +1010,9 @@ export default function CohortReview() {
                         {ext.currentDue && <><span className="text-slate-300">·</span><span>due {new Date(ext.currentDue).toLocaleDateString()}</span></>}
                       </div>
                     </div>
-                    <button onClick={() => openExtReview(ext)}
-                      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium">
+                    <button onClick={() => openExtReview(ext)} disabled={historical}
+                      title={historical ? HISTORICAL_TITLE : undefined}
+                      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium disabled:opacity-50">
                       Review
                     </button>
                   </div>
@@ -1048,7 +1063,7 @@ export default function CohortReview() {
               <ListTodo className="w-4 h-4 text-brand-500" />
               <h3 className="text-slate-900 font-medium">Assigned work</h3>
               {dayTasks.length > 0 && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full">{dayTasks.length}</span>}
-              <button onClick={() => setAssigning(true)} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"><Plus className="w-3.5 h-3.5" />Assign</button>
+              <button onClick={() => setAssigning(true)} disabled={historical} title={historical ? 'Completed programs are read-only' : undefined} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"><Plus className="w-3.5 h-3.5" />Assign</button>
             </div>
             {dayTasks.length > 0 && <div className="flex flex-wrap gap-2 px-5 pt-4" aria-label="Assigned work summary">{taskGroups.map((group) => <span key={group.status} className="rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">{(TASK_STATUS_META[group.status] ?? TASK_STATUS_META.assigned).label} <strong className="ml-1 text-foreground">{group.items.length}</strong></span>)}</div>}
             <div className="p-4">
@@ -1144,12 +1159,12 @@ export default function CohortReview() {
                                       {canManage && (
                                         <>
                                           <button onClick={() => { setEditingDue(isEditingDue ? null : t.id); setDueVal(t.dueDate ? new Date(t.dueDate).toISOString().split('T')[0] : ''); }}
-                                            title="Change deadline" className="p-1 text-slate-400 hover:text-brand-600 disabled:opacity-40" disabled={busy}>
+                                            title={historical ? HISTORICAL_TITLE : 'Change deadline'} className="p-1 text-slate-400 hover:text-brand-600 disabled:opacity-40" disabled={busy || historical}>
                                             <CalendarClock className="w-3.5 h-3.5" />
                                           </button>
                                           {canUnassign && (
-                                            <button onClick={() => unassignTask(t.id)} title="Unassign task"
-                                              className="p-1 text-slate-400 hover:text-red-500 disabled:opacity-40" disabled={busy}>
+                                            <button onClick={() => unassignTask(t.id)} title={historical ? HISTORICAL_TITLE : 'Unassign task'}
+                                              className="p-1 text-slate-400 hover:text-red-500 disabled:opacity-40" disabled={busy || historical}>
                                               {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                                             </button>
                                           )}
@@ -1207,7 +1222,7 @@ export default function CohortReview() {
             </div>
             <div className="flex gap-2">
               {(['present', 'absent', 'excused'] as Attendance[]).map((s) => (
-                <button key={s} onClick={() => mark(s)} disabled={!editable}
+                <button key={s} onClick={() => mark(s)} disabled={!editable} title={historical ? HISTORICAL_TITLE : undefined}
                   className={`flex-1 px-2 py-1.5 rounded-lg border text-xs font-medium capitalize transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${attendance[mentee!.id] === s ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}>
                   {s}
                 </button>
@@ -1231,7 +1246,7 @@ export default function CohortReview() {
             <h3 className="font-semibold text-slate-900 mb-2">Quick note</h3>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="A coaching note…"
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-brand-500" />
-            <button onClick={sendNote} disabled={busy === 'note' || !note.trim()} className="mt-2 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50">
+            <button onClick={sendNote} disabled={busy === 'note' || !note.trim() || historical} title={historical ? HISTORICAL_TITLE : undefined} className="mt-2 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50">
               {busy === 'note' ? <Loader2 className="w-4 h-4 animate-spin" /> : noteSent ? <Check className="w-4 h-4" /> : <Send className="w-4 h-4" />}{noteSent ? 'Logged' : 'Log note'}
             </button>
           </div>
@@ -1240,7 +1255,7 @@ export default function CohortReview() {
           <div className="bg-card rounded-2xl border border-slate-200 p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-900 flex items-center gap-2"><Flag className="w-4 h-4 text-red-500" />Open roadblocks</h3>
-              <button onClick={() => setShowAddBlocker(true)} title="Log a roadblock" className="p-1 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-slate-100"><Plus className="w-4 h-4" /></button>
+              <button onClick={() => setShowAddBlocker(true)} disabled={historical} title={historical ? HISTORICAL_TITLE : 'Log a roadblock'} className="p-1 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-slate-100 disabled:opacity-50"><Plus className="w-4 h-4" /></button>
             </div>
             {blockers.length === 0 ? (
               <p className="text-sm text-slate-500">None open.</p>
@@ -1252,7 +1267,7 @@ export default function CohortReview() {
                       <p className="text-sm text-slate-900">{b.title}</p>
                       <p className="text-xs text-slate-500 capitalize">{b.severity} · {b.category}</p>
                     </div>
-                    <button onClick={() => resolveBlocker(b.id)} disabled={busy === b.id} className="text-emerald-600 hover:text-emerald-700 shrink-0">
+                    <button onClick={() => resolveBlocker(b.id)} disabled={busy === b.id || historical} title={historical ? HISTORICAL_TITLE : undefined} className="text-emerald-600 hover:text-emerald-700 shrink-0 disabled:opacity-50">
                       {busy === b.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                     </button>
                   </div>
@@ -1276,8 +1291,8 @@ export default function CohortReview() {
                 {deferred.size} deferred — jump to them from the dots above before finishing.
               </div>
             )}
-            <button onClick={finishOrReopen}
-              className={`mt-4 w-full px-3 py-2 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 ${session?.status === 'finished' || !allSeen ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
+            <button onClick={finishOrReopen} disabled={historical} title={historical ? HISTORICAL_TITLE : undefined}
+              className={`mt-4 w-full px-3 py-2 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 disabled:opacity-50 ${session?.status === 'finished' || !allSeen ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
               {session?.status === 'finished'
                 ? (<><RotateCcw className="w-4 h-4" />Reopen to edit</>)
                 : allSeen ? 'Finish review' : `Finish (${pendingCount} not reviewed)`}
@@ -1332,11 +1347,11 @@ export default function CohortReview() {
         subtitle={extReview ? extReview.taskTitle : undefined}
         footer={
           <>
-            <button onClick={() => decideExtension(false)} disabled={busy === 'extension'}
+            <button onClick={() => decideExtension(false)} disabled={busy === 'extension' || historical} title={historical ? HISTORICAL_TITLE : undefined}
               className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50">
               Decline
             </button>
-            <button onClick={() => decideExtension(true)} disabled={busy === 'extension'}
+            <button onClick={() => decideExtension(true)} disabled={busy === 'extension' || historical} title={historical ? HISTORICAL_TITLE : undefined}
               className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50">
               {busy === 'extension' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}Approve
             </button>
@@ -1369,13 +1384,13 @@ export default function CohortReview() {
       {/* Review the right way for the task's type — interview + quiz have their
           own review UIs; everything else uses the generic ReviewDrawer. */}
       {reviewing && reviewing.type === 'interview' && (
-        <InterviewReviewDrawer taskId={reviewing.taskId} onClose={() => setReviewing(null)} onFinalized={refresh} />
+        <InterviewReviewDrawer taskId={reviewing.taskId} onClose={() => setReviewing(null)} onFinalized={refresh} readOnly={historical} />
       )}
       {reviewing && reviewing.type === 'quiz' && (
-        <QuizReviewDrawer taskId={reviewing.taskId} onClose={() => setReviewing(null)} onReviewed={refresh} />
+        <QuizReviewDrawer taskId={reviewing.taskId} onClose={() => setReviewing(null)} onReviewed={refresh} readOnly={historical} />
       )}
       {reviewing && reviewing.type !== 'interview' && reviewing.type !== 'quiz' && (
-        <ReviewDrawer item={reviewing} onClose={() => setReviewing(null)} onReviewed={refresh} />
+        <ReviewDrawer item={reviewing} onClose={() => setReviewing(null)} onReviewed={refresh} readOnly={historical} />
       )}
 
       {/* Opening a task also respects its type, so an interview/quiz doesn't fall
@@ -1383,12 +1398,12 @@ export default function CohortReview() {
       {taskDetail && (() => {
         const taskType = taskDetail.roadmapTask?.type || taskDetail.type;
         if (taskType === 'interview') {
-          return <InterviewReviewDrawer taskId={taskDetail.id} onClose={() => setTaskDetail(null)} onFinalized={refresh} />;
+          return <InterviewReviewDrawer taskId={taskDetail.id} onClose={() => setTaskDetail(null)} onFinalized={refresh} readOnly={historical} />;
         }
         if (taskType === 'quiz') {
-          return <QuizReviewDrawer taskId={taskDetail.id} onClose={() => setTaskDetail(null)} onReviewed={refresh} />;
+          return <QuizReviewDrawer taskId={taskDetail.id} onClose={() => setTaskDetail(null)} onReviewed={refresh} readOnly={historical} />;
         }
-        return <MenteeTaskDrawer key={taskDetail.id} task={taskDetail} onClose={() => setTaskDetail(null)} onChanged={refresh} />;
+        return <MenteeTaskDrawer key={taskDetail.id} task={taskDetail} onClose={() => setTaskDetail(null)} onChanged={refresh} readOnly={historical} />;
       })()}
 
       {assigning && mentee && (
@@ -1406,6 +1421,7 @@ export default function CohortReview() {
         onClose={() => setScheduleOpen(false)}
         clans={clans}
         defaultClanId={effectiveClanId}
+        readOnly={historical}
       />
 
       {/* Cohort-review history: browse & open past dated sessions to view or edit. */}
@@ -1482,14 +1498,14 @@ export default function CohortReview() {
                 </div>
                 <div className="flex items-center justify-end gap-1 mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/60">
                   {s.status === 'finished' && (
-                    <button type="button" onClick={() => reopenHistorySession(s)} disabled={busy || deletionBlocked}
-                      className="px-2 py-1 rounded-md text-xs font-medium text-slate-600 hover:bg-slate-100 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed" title={deletionBlocked ? 'Locked by your org' : 'Reopen to edit'}>
+                    <button type="button" onClick={() => reopenHistorySession(s)} disabled={busy || deletionBlocked || historical}
+                      className="px-2 py-1 rounded-md text-xs font-medium text-slate-600 hover:bg-slate-100 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed" title={historical ? HISTORICAL_TITLE : deletionBlocked ? 'Locked by your org' : 'Reopen to edit'}>
                       <RotateCcw className="w-3.5 h-3.5" />Reopen
                     </button>
                   )}
-                  <button type="button" onClick={() => removeHistorySession(s)} disabled={busy || deletionBlocked}
+                  <button type="button" onClick={() => removeHistorySession(s)} disabled={busy || deletionBlocked || historical}
                     className="px-2 py-1 rounded-md text-xs font-medium text-red-600 hover:bg-red-50 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title={deletionBlocked ? 'Locked by your org' : sessionIsEmpty(s) ? 'Discard empty session' : 'Delete session'}>
+                    title={historical ? HISTORICAL_TITLE : deletionBlocked ? 'Locked by your org' : sessionIsEmpty(s) ? 'Discard empty session' : 'Delete session'}>
                     {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : deletionBlocked ? <Lock className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
                     {sessionIsEmpty(s) ? 'Discard' : 'Delete'}
                   </button>

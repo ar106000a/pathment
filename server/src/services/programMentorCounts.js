@@ -11,10 +11,12 @@ async function programMentorCounts(programIds, transaction) {
       SELECT c.program_id, cm.user_id AS mentor_id
       FROM clans c JOIN clan_memberships cm ON cm.clan_id = c.id
       WHERE c.organization_id=:organizationId AND cm.organization_id=:organizationId AND c.program_id IN (:programIds) AND c.status = 'active'
+        AND c.kind = 'cohort'
         AND cm.status = 'active' AND cm.role IN ('lead_mentor', 'co_mentor')
       UNION
       SELECT program_id, lead_mentor_id AS mentor_id FROM clans
       WHERE organization_id=:organizationId AND program_id IN (:programIds) AND status = 'active' AND lead_mentor_id IS NOT NULL
+        AND kind = 'cohort'
       UNION
       SELECT e.program_id, mm.mentor_id
       FROM mentor_mentee_matches mm JOIN enrollments e ON e.id = mm.enrollment_id

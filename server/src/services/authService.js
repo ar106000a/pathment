@@ -562,7 +562,10 @@ class AuthService {
 
     if (userResponse.capabilities.includes('mentee')) {
       const gamificationService = require('./gamificationService');
-      gamificationService.awardDailyLoginPoint(user.id).catch(() => {});
+      // Finish this non-critical write before the request returns. Leaving it
+      // detached let the next request/test reset collide with its database
+      // locks and could also drop the award when a short-lived process exited.
+      await gamificationService.awardDailyLoginPoint(user.id).catch(() => {});
     }
 
     return {

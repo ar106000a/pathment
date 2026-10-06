@@ -47,10 +47,10 @@ beforeEach(async () => {
 });
 
 describe('the features a key can be pointed at', () => {
-  test('the server routes twelve, and scoring applicants is one of them', async () => {
+  test('the server routes thirteen, and scoring applicants is one of them', async () => {
     // The phone's own list is asserted against this exact set in features.test.ts.
     expect(aiConnectionService.FEATURES).toContain('assessment');
-    expect(aiConnectionService.FEATURES).toHaveLength(12);
+    expect(aiConnectionService.FEATURES).toHaveLength(13);
   });
 
   test('every feature comes back in the routing, unset rather than absent', async () => {

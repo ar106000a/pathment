@@ -83,6 +83,9 @@ export function switchWorkspace(slug: string): void {
   const origin = local ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://app.pathment.me');
   const path = logicalPathname(window.location.pathname);
   // Record ids and role areas from the previous workspace need not exist here.
-  const destination = path === '/workspace-preview' ? path : '';
+  // `/w/:slug` renders the account entry page. Sending a signed-in user there
+  // caused it to bounce back to the workspace chooser. The scoped login route
+  // already resolves a valid session to the correct active-role dashboard.
+  const destination = path === '/workspace-preview' ? path : '/login';
   window.location.assign(`${origin}/w/${slug}${destination}`);
 }

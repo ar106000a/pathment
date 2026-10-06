@@ -14,7 +14,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useMentorApprovalCounts } from '@/lib/hooks/shared/useNavBadges';
-import { useClan, ALL_CLANS } from '@/lib/context/ClanContext';
+import { useClan, ALL_CLANS, isHistoricalMentorScope } from '@/lib/context/ClanContext';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useMentorCohort, type CohortRisk } from '@/lib/hooks/mentor';
 import { Avatar } from '@/components/shared/Avatar';
@@ -35,7 +35,8 @@ const AssignTaskDrawer = dynamic(() =>
 export default function MentorCockpit() {
   const router = useRouter();
   const { user } = useAuth();
-  const { activeClanId } = useClan();
+  const { clans, activeClanId } = useClan();
+  const historical = isHistoricalMentorScope(clans, activeClanId);
   const approvals = useMentorApprovalCounts(!!user?.id);
   const approvalCount = approvals.loading
     ? '…'
@@ -80,7 +81,8 @@ export default function MentorCockpit() {
         <div className="mentor-cockpit-actions flex flex-wrap items-center gap-2">
           <button
             onClick={() => setBulkAssign(true)}
-            disabled={cohort.length === 0}
+            disabled={cohort.length === 0 || historical}
+            title={historical ? 'Completed programs are read-only' : undefined}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-card px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
             <Plus className="w-4 h-4" />

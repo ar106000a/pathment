@@ -124,7 +124,7 @@ describe('changing a grade after approval', () => {
     it('locks the mentor out, and says what to do instead', async () => {
       await expect(verification.verify(template.id, mentee.id,
         { finalTier: 'silver', reason: 'Deserves more' }, lead))
-        .rejects.toThrow(/Request a revoke and change/i);
+        .rejects.toThrow(/Request a change and an admin will decide/i);
       expect((await rowFor(mentee)).finalTier).toBe('bronze');
     });
 

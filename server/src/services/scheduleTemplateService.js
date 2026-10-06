@@ -4,6 +4,7 @@ const { NotFoundError, ValidationError } = require('../utils/errors/errorTypes')
 const { normalizeTaskSchedule } = require('../utils/taskSchedule');
 const linearRoadmapService = require('./linearRoadmapService');
 const { resolveMenteeClanId, listMenteeClans, clanScopedWhere } = require('./menteeClanScope');
+const clanLifecycleService = require('./clanLifecycleService');
 
 /**
  * scheduleTemplateService - reusable day-shape templates + per-mentee filled
@@ -161,6 +162,7 @@ class ScheduleTemplateService {
     for (const menteeId of menteeIds) {
       const resolvedClanId = await resolveMenteeClanId(menteeId, clanId, { actorId: assignedBy });
       if (!resolvedClanId) throw new ValidationError('Mentee has no clan membership to attach this schedule to');
+      await clanLifecycleService.assertClanWritable(resolvedClanId);
       let ms = await models.MenteeSchedule.findOne({ where: { menteeId, clanId: resolvedClanId } });
       if (!ms) {
         const memberships = await listMenteeClans(menteeId);
@@ -254,8 +256,9 @@ class ScheduleTemplateService {
 
   /** Fill/clear one slot: kind 'roadmap' (roadmapChain) | 'recurring' (recurring) | 'empty'. */
   async updateSlot(menteeId, slotId, patch, mentorId = null, clanId = null) {
-    const { ms } = await this._findSchedule(menteeId, clanId, mentorId);
+    const { ms, clanId: resolvedClanId } = await this._findSchedule(menteeId, clanId, mentorId);
     if (!ms) throw new NotFoundError('Mentee has no schedule assigned');
+    await clanLifecycleService.assertClanWritable(resolvedClanId);
     const schedule = Array.isArray(ms.schedule) ? ms.schedule : [];
     let idx = schedule.findIndex((s, i) => (s.id || slug(s.label) || `block-${i}`) === slotId);
     if (idx === -1 && /^(slot|block)-\d+$/.test(slotId)) {
@@ -317,9 +320,13 @@ class ScheduleTemplateService {
           startsOn,
           endsOn,
           dueOffsetDays,
-          intervalWeeks
+          intervalWeeks,
+          clanId: ms.clanId || null,
+          mentorId: mentorId || slot.recurring?.mentorId || ms.assignedBy || null,
         };
       }
+      // Keep materializer scoped to this schedule's clan (standing vs cohort).
+      if (slot.recurring) slot.recurring = { ...slot.recurring, clanId: ms.clanId || slot.recurring.clanId || null };
       slot.roadmapChain = [];
     } else if (slot.kind === 'empty') {
       slot.roadmapChain = [];
@@ -337,7 +344,9 @@ class ScheduleTemplateService {
     let chainStarted = null;
     if (slot.kind === 'roadmap' && mentorId && Array.isArray(slot.roadmapChain) && slot.roadmapChain.length) {
       try {
-        const started = await linearRoadmapService.startChainHead(mentorId, menteeId, slot.id, slot.roadmapChain, slot.startStep || 0);
+        const started = await linearRoadmapService.startChainHead(
+          mentorId, menteeId, slot.id, slot.roadmapChain, slot.startStep || 0, ms.clanId || clanId || null,
+        );
         if (started) chainStarted = slot.roadmapChain[0];
       } catch (_) { /* slot config still saved; start is best-effort */ }
     }
@@ -366,7 +375,8 @@ class ScheduleTemplateService {
       if (idx === -1) continue;
 
       const targetSlotId = sched[idx].id || slotId;
-      await this.updateSlot(ms.menteeId, targetSlotId, patch, mentorId);
+      // Pass each row's clanId so dual-clan mentees get the right schedule updated.
+      await this.updateSlot(ms.menteeId, targetSlotId, patch, mentorId, ms.clanId || null);
       applied += 1;
     }
     return { applied };

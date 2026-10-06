@@ -18,7 +18,7 @@ const FRICTION_KINDS = ['job', 'domestic', 'electricity', 'hardware', 'health', 
  * count in their favour). Three actions: log a blocker, log a delay, ask for
  * more time.
  */
-export function FrictionPanel({ taskId, hasPendingExtension = false }: { taskId: string; hasPendingExtension?: boolean }) {
+export function FrictionPanel({ taskId, hasPendingExtension = false, readOnly = false }: { taskId: string; hasPendingExtension?: boolean; readOnly?: boolean }) {
   const [open, setOpen] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState<Panel>(null);
@@ -73,7 +73,9 @@ export function FrictionPanel({ taskId, hasPendingExtension = false }: { taskId:
   const Pill = ({ p, icon: Icon, label }: { p: Panel; icon: typeof Flag; label: string }) => (
     <button
       onClick={() => toggle(p)}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+      disabled={readOnly}
+      title={readOnly ? 'Completed programs are read-only' : undefined}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 ${
         open === p ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-700 hover:border-brand-300'
       }`}
     >
@@ -109,7 +111,7 @@ export function FrictionPanel({ taskId, hasPendingExtension = false }: { taskId:
             </select>
           </div>
           <div className="flex justify-end">
-            <button onClick={logBlocker} disabled={saving} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
+            <button onClick={logBlocker} disabled={saving || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}Log roadblock
             </button>
           </div>
@@ -126,7 +128,7 @@ export function FrictionPanel({ taskId, hasPendingExtension = false }: { taskId:
             <input type="number" min={0} value={dDays} onChange={(e) => setDDays(Number(e.target.value))} className={`${field} w-24`} placeholder="days" />
           </div>
           <div className="flex justify-end">
-            <button onClick={logDelay} disabled={saving} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
+            <button onClick={logDelay} disabled={saving || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}Log delay
             </button>
           </div>
@@ -148,7 +150,7 @@ export function FrictionPanel({ taskId, hasPendingExtension = false }: { taskId:
                 <span className="text-sm text-slate-500">extra days</span>
               </div>
               <div className="flex justify-end">
-                <button onClick={requestExtension} disabled={saving} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
+                <button onClick={requestExtension} disabled={saving || readOnly} title={readOnly ? 'Completed programs are read-only' : undefined} className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}Request extension
                 </button>
               </div>

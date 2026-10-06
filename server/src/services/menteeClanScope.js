@@ -1,5 +1,5 @@
-const { Op } = require('sequelize');
-const { models } = require('../db');
+const { Op, literal } = require('sequelize');
+const { models, sequelize } = require('../db');
 const { ValidationError, AuthorizationError } = require('../utils/errors/errorTypes');
 const { VISIBLE_MEMBERSHIP_STATUSES } = require('../config/membership');
 
@@ -60,7 +60,7 @@ async function resolveMenteeClanId(menteeId, requestedClanId, { actorId } = {}) 
 function clanScopedWhere(base, clanId, membershipCount) {
   if (!clanId) return base;
   if (membershipCount === 1) {
-    return { ...base, [Op.or]: [{ clanId }, { clanId: null }] };
+    return { ...base, [Op.or]: [{ clanId }, { clanId: null, [Op.and]: literal(`EXISTS (SELECT 1 FROM clans WHERE id = ${sequelize.escape(clanId)} AND kind = 'cohort')`) }] };
   }
   return { ...base, clanId };
 }

@@ -58,9 +58,16 @@ export function scopeToClan<T>(
   return { visible, hiddenByClan, emptiedByClan: visible.length === 0 && hiddenByClan > 0 };
 }
 
-/** A row that names a single clan — a mentee, a submission, an approval. */
-export const clanIdOfRow = (row: { clan?: { id: string } | null }): string[] =>
-  (row.clan?.id ? [row.clan.id] : []);
+/** A row that names clan(s) — prefer `clans[]` so dual memberships stay visible. */
+export const clanIdOfRow = (row: {
+  clan?: { id: string } | null;
+  clans?: Array<{ id: string } | null> | null;
+}): string[] => {
+  if (Array.isArray(row.clans) && row.clans.length) {
+    return row.clans.map((c) => c?.id).filter((id): id is string => Boolean(id));
+  }
+  return row.clan?.id ? [row.clan.id] : [];
+};
 
 // ── Conversations ────────────────────────────────────────────────────────────
 
@@ -75,7 +82,11 @@ export function scopeConversationsToClan<T extends Pick<ConversationSummary, 'cl
   role: 'admin' | 'mentor' | 'mentee',
   activeClanId: string,
 ): ClanScopeResult<T> {
-  if (role !== 'mentor') return { visible: conversations, hiddenByClan: 0, emptiedByClan: false };
+  // Mentors and mentees both pick a clan when dual-membered; admin stays unscoped.
+  // Unattributable threads (empty clanIds) still show via matchesClanScope.
+  if (role !== 'mentor' && role !== 'mentee') {
+    return { visible: conversations, hiddenByClan: 0, emptiedByClan: false };
+  }
   return scopeToClan(conversations, activeClanId, (c) => c.clanIds);
 }
 

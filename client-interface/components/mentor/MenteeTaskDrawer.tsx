@@ -54,14 +54,16 @@ export function MenteeTaskDrawer({
   task,
   onClose,
   onChanged,
+  readOnly = false,
 }: {
   task: any;
   onClose: () => void;
   onChanged: () => void;
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const confirm = useConfirm();
-  const canEdit = [
+  const canEdit = !readOnly && [
     "assigned",
     "not_started",
     "in_progress",
@@ -120,7 +122,7 @@ export function MenteeTaskDrawer({
     }
   };
 
-  const canUnassign = !["submitted", "completed", "cancelled"].includes(
+  const canUnassign = !readOnly && !["submitted", "completed", "cancelled"].includes(
     task.status,
   );
   // Submitted / revision tasks open the review; an already-reviewed (completed)

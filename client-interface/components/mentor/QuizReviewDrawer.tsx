@@ -34,10 +34,12 @@ export function QuizReviewDrawer({
   taskId,
   onClose,
   onReviewed,
+  readOnly = false,
 }: {
   taskId: string;
   onClose: () => void;
   onReviewed?: () => void;
+  readOnly?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
   const [review, setReview] = useState<QuizReview | null>(null);
@@ -67,7 +69,7 @@ export function QuizReviewDrawer({
 
   useEffect(() => { load(); }, [load]);
 
-  const canReview = !!review?.canReview;
+  const canReview = !!review?.canReview && !readOnly;
 
   const saveScore = async (it: QuizReviewItem, patch: { points?: string; note?: string }) => {
     const cur = scores[it.questionId] || { points: '', note: '' };

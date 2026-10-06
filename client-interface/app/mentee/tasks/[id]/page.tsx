@@ -33,6 +33,7 @@ import { TaskProgressTimeline } from "@/components/shared/TaskProgressTimeline";
 import { SubmitTaskDrawer } from "@/components/mentee/SubmitTaskDrawer";
 import { InterviewReviewDrawer } from "@/components/mentor/InterviewReviewDrawer";
 import { isMissingDescription } from "@/lib/utils/html";
+import { useClan, isHistoricalCohortClan } from "@/lib/context/ClanContext";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -41,6 +42,11 @@ interface PageProps {
 export default function TaskDetailsPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const router = useRouter();
+  const { menteeClans, menteeActiveClanId } = useClan();
+  const historical = isHistoricalCohortClan(
+    menteeClans.find((c) => c.id === menteeActiveClanId),
+  );
+  const HISTORICAL_TITLE = "Completed programs are read-only";
   const { task, loading, error, errorStatus, refetch } = useTaskDetail(
     resolvedParams.id,
   );
@@ -291,7 +297,9 @@ export default function TaskDetailsPage({ params }: PageProps) {
                     ? () => setInterviewResultsOpen(true)
                     : openInterview
                 }
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors"
+                disabled={historical && task.status !== "submitted"}
+                title={historical && task.status !== "submitted" ? HISTORICAL_TITLE : undefined}
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
               >
                 <Mic className="w-4 h-4" />
                 {task.status === "submitted"
@@ -335,7 +343,9 @@ export default function TaskDetailsPage({ params }: PageProps) {
             <div className="flex justify-end">
               <button
                 onClick={openQuiz}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors"
+                disabled={historical}
+                title={historical ? HISTORICAL_TITLE : undefined}
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
               >
                 <ListChecks className="w-4 h-4" />
                 {task.status === "in_progress" ? "Resume quiz" : "Start quiz"}
@@ -348,7 +358,9 @@ export default function TaskDetailsPage({ params }: PageProps) {
           <div className="flex flex-col items-end gap-1">
             <button
               onClick={() => setSubmitOpen(true)}
-              className="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors"
+              disabled={historical}
+              title={historical ? HISTORICAL_TITLE : undefined}
+              className="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
             >
               {task.status === "submitted"
                 ? "Update submission"
@@ -798,13 +810,14 @@ export default function TaskDetailsPage({ params }: PageProps) {
           Interview and quiz tasks are one sitting, so there is no day three. */}
           {!["completed", "cancelled"].includes(task.status) &&
             !isInterview &&
-            !isQuiz && <TaskProgressTimeline taskId={task.id} mode="mentee" />}
+            !isQuiz && <TaskProgressTimeline taskId={task.id} mode="mentee" readOnly={historical} />}
 
           {/* What's getting in the way - log roadblock / delay / request extension */}
           {!["completed", "cancelled"].includes(task.status) && (
             <FrictionPanel
               taskId={task.id}
               hasPendingExtension={hasPendingExtension}
+              readOnly={historical}
             />
           )}
         </section>
@@ -821,6 +834,7 @@ export default function TaskDetailsPage({ params }: PageProps) {
           }}
           onClose={() => setSubmitOpen(false)}
           onSubmitted={refetch}
+          readOnly={historical}
         />
       )}
 

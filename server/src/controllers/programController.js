@@ -1,4 +1,5 @@
 const programService = require('../services/programService');
+const programLifecycleService = require('../services/programLifecycleService');
 const { successResponse, paginatedResponse } = require('../utils/responses');
 const { catchAsync } = require('../middlewares/errorHandler');
 
@@ -162,6 +163,50 @@ class ProgramController {
       'Program statistics retrieved successfully',
       stats
     ));
+  });
+
+  /**
+   * Preview formal program close (admin)
+   * @route GET /api/programs/:id/completion
+   * @access Admin
+   */
+  previewCompletion = catchAsync(async (req, res) => {
+    const preview = await programLifecycleService.preview(req.params.id, req.user);
+    res.status(200).json(successResponse('Program completion', preview));
+  });
+
+  /**
+   * Formally close a program
+   * @route POST /api/programs/:id/close
+   * @access Admin
+   */
+  closeProgram = catchAsync(async (req, res) => {
+    const program = await programLifecycleService.closeProgram(req.params.id, req.user, req.body || {});
+    res.status(200).json(successResponse('Program closed', program));
+  });
+
+  /**
+   * Reopen a formally closed program
+   * @route POST /api/programs/:id/reopen
+   * @access Admin
+   */
+  reopenProgram = catchAsync(async (req, res) => {
+    const result = await programLifecycleService.reopenProgram(
+      req.params.id,
+      req.body.reason,
+      req.user
+    );
+    res.status(200).json(successResponse('Program reopened', result));
+  });
+
+  /**
+   * Final results after program close
+   * @route GET /api/programs/:id/results
+   * @access Admin, Mentor, Mentee (scoped in service)
+   */
+  getFinalResults = catchAsync(async (req, res) => {
+    const results = await programLifecycleService.results(req.params.id, req.user);
+    res.status(200).json(successResponse('Final results', results));
   });
 }
 

@@ -30,7 +30,7 @@ export default function MessageCenter({ role }: MessageCenterProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
-  const { activeClanId, setActiveClanId, clans } = useClan();
+  const { activeClanId, setActiveClanId, clans, menteeActiveClanId } = useClan();
 
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
@@ -66,22 +66,29 @@ export default function MessageCenter({ role }: MessageCenterProps) {
   const participantId = searchParams.get('participantId');
   const queryConversationId = searchParams.get('conversationId');
 
-  // Scope the list to the clan picked in the sidebar (mentors only). Shared
-  // with the sidebar's unread badge so the two cannot disagree — see
-  // lib/utils/conversation-scope.ts. `hiddenByClan` is what lets the empty
-  // state say "none in this clan" instead of "no conversations yet".
+  // Scope the list to the clan picked in the sidebar (mentor + mentee dual-clan).
+  // Shared with the sidebar unread badge — see lib/utils/clan-scope.ts.
+  const portalClanId = role === 'mentee' ? menteeActiveClanId : activeClanId;
   const { visible: visibleConversations, hiddenByClan } = useMemo(
-    () => scopeConversationsToClan(conversations, role, activeClanId),
-    [conversations, role, activeClanId]
+    () => scopeConversationsToClan(conversations, role, portalClanId),
+    [conversations, role, portalClanId]
   );
 
   const selectedConversation = useMemo(
     () =>
-      conversations.find((c) => c.id === selectedConversationId) ||
+      visibleConversations.find((c) => c.id === selectedConversationId) ||
       archivedConversations.find((c) => c.id === selectedConversationId) ||
       null,
-    [conversations, archivedConversations, selectedConversationId]
+    [visibleConversations, archivedConversations, selectedConversationId]
   );
+
+  // Drop selection when the open thread is outside the selected clan.
+  useEffect(() => {
+    if (!selectedConversationId) return;
+    const stillVisible = visibleConversations.some((c) => c.id === selectedConversationId)
+      || archivedConversations.some((c) => c.id === selectedConversationId);
+    if (!stillVisible) setSelectedConversationId(null);
+  }, [selectedConversationId, visibleConversations, archivedConversations]);
 
   const selectedTitle = useMemo(() => {
     if (!selectedConversation) {

@@ -4,6 +4,7 @@ const { NotFoundError, ValidationError, ConflictError } = require('../utils/erro
 const cohortService = require('./cohortService');
 const clanService = require('./clanService');
 const notificationOrchestrator = require('./notificationOrchestrator');
+const authzService = require('./authzService');
 const { NOTIFICATION_EVENTS } = require('../config/notificationMatrix');
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
@@ -168,7 +169,8 @@ class PromotionService {
           actionLabel: 'Review promotions',
           relatedEntityType: entityType,
           relatedEntityId: candidate.id,
-          emailSubject: awaiting ? `Pathment: ${who} is ready for co-mentor promotion` : `Pathment: ${who} nominated for co-mentor`
+          emailSubject: awaiting ? `Pathment: ${who} is ready for co-mentor promotion` : `Pathment: ${who} nominated for co-mentor`,
+          clanId: candidate.targetClanId || null,
         },
         dedupe: { relatedEntityType: entityType, relatedEntityId: candidate.id }
       });
@@ -177,19 +179,44 @@ class PromotionService {
     }
   }
 
-  async list({ actorId, isAdmin }) {
-    const where = isAdmin ? {} : { nominatedBy: actorId };
+  async _mentorMenteeIds(actorId, activeClanId = null) {
+    let clanIds = await authzService.mentoredClanIds(actorId);
+    if (activeClanId) {
+      if (!clanIds.includes(activeClanId)) return [];
+      clanIds = [activeClanId];
+    }
+    if (!clanIds.length) return [];
+    const memberships = await models.ClanMembership.findAll({
+      where: { clanId: { [Op.in]: clanIds }, role: 'mentee', status: { [Op.in]: ['active', 'paused'] } },
+      attributes: ['userId'], raw: true
+    });
+    return [...new Set(memberships.map((membership) => membership.userId))];
+  }
+
+  async list({ actorId, isAdmin, activeClanId = null }) {
+    const menteeIds = isAdmin ? null : await this._mentorMenteeIds(actorId, activeClanId);
+    const where = isAdmin ? {} : { menteeId: { [Op.in]: menteeIds.length ? menteeIds : [null] } };
     const candidates = await models.PromotionCandidate.findAll({ where, order: [['created_at', 'DESC']] });
     return Promise.all(candidates.map((c) => this._enrich(c)));
   }
 
-  async nominate(menteeId, mentorId) {
+  async nominate(menteeId, mentorId, { isAdmin = false, activeClanId = null } = {}) {
     if (!menteeId) throw new ValidationError('menteeId is required');
+    if (!isAdmin) {
+      const allowed = await this._mentorMenteeIds(mentorId, activeClanId);
+      if (!allowed.includes(menteeId)) throw new ValidationError('You can only nominate a mentee from the selected clan.');
+    }
     const existing = await models.PromotionCandidate.findOne({
       where: { menteeId, stage: { [Op.ne]: 'promoted' } }
     });
     if (existing) throw new ConflictError('This mentee is already in the promotion pipeline');
-    const candidate = await models.PromotionCandidate.create({ menteeId, nominatedBy: mentorId, stage: 'nominated' });
+    const candidate = await models.PromotionCandidate.create({
+      menteeId,
+      nominatedBy: mentorId,
+      stage: 'nominated',
+      // Record the clan the mentor nominated from so promote/seat never guess.
+      targetClanId: activeClanId || null,
+    });
     await this._notifyAdmins(candidate, 'nominated');
     return this._enrich(candidate);
   }
@@ -236,7 +263,8 @@ class PromotionService {
           actionLabel: 'View promotions',
           relatedEntityType: `promotion_result_${kind}`,
           relatedEntityId: candidate.id,
-          emailSubject: promoted ? `Pathment: ${who} was promoted to co-mentor` : `Pathment: ${who}'s promotion wasn't approved`
+          emailSubject: promoted ? `Pathment: ${who} was promoted to co-mentor` : `Pathment: ${who}'s promotion wasn't approved`,
+          clanId: candidate.targetClanId || null,
         },
         dedupe: { relatedEntityType: `promotion_result_${kind}`, relatedEntityId: candidate.id }
       });
@@ -288,7 +316,8 @@ class PromotionService {
           actionLabel: 'Open Mentor view',
           relatedEntityType: 'promotion_candidate',
           relatedEntityId: candidate.id,
-          emailSubject: 'Pathment: you\'ve been promoted to co-mentor'
+          emailSubject: 'Pathment: you\'ve been promoted to co-mentor',
+          clanId: targetClan || candidate.targetClanId || null,
         },
         dedupe: { relatedEntityType: 'promotion_done', relatedEntityId: candidate.id }
       });

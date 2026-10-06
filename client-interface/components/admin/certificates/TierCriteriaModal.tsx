@@ -37,6 +37,8 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
   const [tierModalMinRating, setTierModalMinRating] = useState(4.0);
   const [tierModalMinAttendance, setTierModalMinAttendance] = useState(70);
   const [tierModalCustomRule, setTierModalCustomRule] = useState('');
+  const [tierModalChecklist, setTierModalChecklist] = useState<string[]>([]);
+  const [tierModalChecklistInput, setTierModalChecklistInput] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -62,6 +64,7 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
       setTierModalMinRating(editingTier.minAvgRating ?? 4.0);
       setTierModalMinAttendance(editingTier.minAttendanceRate ?? 70);
       setTierModalCustomRule(editingTier.customRule ?? '');
+      setTierModalChecklist(editingTier.reviewChecklist || []);
     } else {
       setTierModalName('');
       setTierModalBadgeUrl('');
@@ -83,8 +86,10 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
       setTierModalMinRating(4.0);
       setTierModalMinAttendance(70);
       setTierModalCustomRule('');
+      setTierModalChecklist([]);
     }
     setTierModalKeywordInput('');
+    setTierModalChecklistInput('');
   }, [isOpen, editingTier]);
 
   if (!isOpen) return null;
@@ -98,7 +103,7 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
         setTierModalBadgeUrl(res.url);
         toast.success('Badge icon uploaded successfully!');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to upload badge icon');
     } finally {
       setUploadingBadge(false);
@@ -126,6 +131,8 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
       minAvgRating: enableMinRating ? tierModalMinRating : null,
       minAttendanceRate: enableMinAttendance ? tierModalMinAttendance : null,
       customRule: enableCustomRule ? tierModalCustomRule.trim() : null,
+      reviewChecklist: [...tierModalChecklist, tierModalChecklistInput.trim()]
+        .map(item => item.trim()).filter((item, index, all) => item && all.indexOf(item) === index),
     };
 
     onSave(savedFields, editingTier?.id);
@@ -419,6 +426,46 @@ export function TierCriteriaModal({ isOpen, editingTier, onClose, onSave }: Tier
               onChange={e => setTierModalCustomRule(e.target.value)}
               className="w-full px-3 py-2 text-xs bg-background border border-border rounded-xl text-foreground focus:outline-none focus:border-brand-500/40 resize-none placeholder:text-muted-foreground/40 disabled:opacity-40 disabled:bg-muted/30"
             />
+          </div>
+
+          <div className="space-y-2 border-t border-border/60 pt-3">
+            <div>
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                Mentor &amp; AI checklist <span className="normal-case font-normal text-muted-foreground/60">(optional)</span>
+              </label>
+              <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                When added, every item must be confirmed by the reviewer and independently supported by AI evidence before this certificate can be awarded.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              {tierModalChecklist.map((item, index) => (
+                <div key={`${item}-${index}`} className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2">
+                  <span className="min-w-0 flex-1 text-xs text-foreground">{item}</span>
+                  <button type="button" onClick={() => setTierModalChecklist(list => list.filter((_, i) => i !== index))} className="text-xs font-bold text-muted-foreground hover:text-red-500" aria-label={`Remove ${item}`}>×</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={tierModalChecklistInput}
+                onChange={event => setTierModalChecklistInput(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter' || !tierModalChecklistInput.trim()) return;
+                  event.preventDefault();
+                  const item = tierModalChecklistInput.trim();
+                  setTierModalChecklist(list => list.includes(item) ? list : [...list, item]);
+                  setTierModalChecklistInput('');
+                }}
+                placeholder="e.g. Completed the multi-vendor project"
+                className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground outline-none focus:border-brand-500/40"
+              />
+              <button type="button" onClick={() => {
+                const item = tierModalChecklistInput.trim();
+                if (!item) return;
+                setTierModalChecklist(list => list.includes(item) ? list : [...list, item]);
+                setTierModalChecklistInput('');
+              }} className="rounded-xl bg-brand-500/10 px-3 py-2 text-xs font-bold text-brand-600 hover:bg-brand-500/20">Add</button>
+            </div>
           </div>
         </div>
 

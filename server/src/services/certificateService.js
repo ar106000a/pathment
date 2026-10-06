@@ -109,9 +109,17 @@ class CertificateService {
     let clanIds = await authzService.clansWhereCan(user, PERMISSIONS.MENTEE_VIEW);
     if (!clanIds.length) return [];
 
-    if (programId) {
+    // Standee selected: that clan only (never cohort clans of the same program).
+    if (clanId) {
+      const picked = await models.Clan.findByPk(clanId, { attributes: ['id', 'kind'] });
+      if (picked?.kind === 'standing') {
+        return clanIds.includes(clanId) ? [clanId] : [];
+      }
+    }
+
+    {
       const inProgram = await models.Clan.findAll({
-        where: { id: { [Op.in]: clanIds }, programId },
+        where: { id: { [Op.in]: clanIds }, kind: 'cohort', ...(programId ? { programId } : {}) },
         attributes: ['id'],
         raw: true
       });
@@ -181,6 +189,43 @@ class CertificateService {
     const activeMentees = [];
     const pausedMentees = [];
 
+    // Standee path: roster = that standing clan only (no enrollments / no cohort).
+    if (clanId) {
+      const picked = await models.Clan.findByPk(clanId, { attributes: ['id', 'name', 'kind'] });
+      if (picked?.kind === 'standing') {
+        const isAdmin = await authzService.actsAsAdmin(user);
+        if (!isAdmin) {
+          const allowed = await this.getMentorScopedMenteeClans(user, programId, { clanId });
+          if (!allowed.includes(clanId)) {
+            return { activeMentees: [], pausedMentees: [] };
+          }
+        }
+        const menteeMembers = await models.ClanMembership.findAll({
+          where: { clanId, role: 'mentee', status: { [Op.in]: ['active', 'paused'] } },
+          include: [{ model: models.User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'email', 'status'] }],
+        });
+        for (const mem of menteeMembers) {
+          if (!mem.user) continue;
+          const u = mem.user;
+          const row = {
+            id: u.id,
+            firstName: u.firstName,
+            lastName: u.lastName,
+            email: u.email,
+            clanId: picked.id,
+            clanName: picked.name,
+          };
+          (mem.status === 'paused' || u.status === 'suspended')
+            ? pausedMentees.push(row)
+            : activeMentees.push(row);
+        }
+        return {
+          activeMentees: deduplicateById(activeMentees),
+          pausedMentees: deduplicateById(pausedMentees),
+        };
+      }
+    }
+
     // One pass over this programme's mentee memberships answers both questions
     // the roster needs: who is paused, and which clan each person sits in.
     // Resolved up front rather than per row — a cohort is hundreds of people,
@@ -190,19 +235,30 @@ class CertificateService {
     if (programId) {
       const memberships = await models.ClanMembership.findAll({
         where: { role: 'mentee', status: { [Op.in]: ['active', 'paused'] } },
-        include: [{ model: models.Clan, as: 'clan', where: { programId }, attributes: ['id', 'name'] }],
+        include: [{ model: models.Clan, as: 'clan', where: { programId, kind: 'cohort' }, attributes: ['id', 'name', 'frozenAt'] }],
         attributes: ['userId', 'status']
       });
       for (const mem of memberships) {
         if (mem.status === 'paused') pausedMenteeIdsSet.add(mem.userId);
-        // Somebody in two clans of one programme keeps the first: the roster
-        // shows where they are, and a second row would double-count them.
-        if (mem.clan && !clanByMentee.has(mem.userId)) {
-          clanByMentee.set(mem.userId, { clanId: mem.clan.id, clanName: mem.clan.name });
+        // Prefer a frozen (completed) cohort clan over a live one when both
+        // exist — cohort certificates stay on the finished program.
+        if (!mem.clan) continue;
+        const prev = clanByMentee.get(mem.userId);
+        const nextFrozen = !!mem.clan.frozenAt;
+        if (!prev || (nextFrozen && !prev._frozen)) {
+          clanByMentee.set(mem.userId, {
+            clanId: mem.clan.id,
+            clanName: mem.clan.name,
+            _frozen: nextFrozen,
+          });
         }
       }
     }
-    const withClan = (row) => ({ ...row, ...(clanByMentee.get(row.id) ?? { clanId: null, clanName: null }) });
+    const withClan = (row) => {
+      const hit = clanByMentee.get(row.id);
+      if (!hit) return { ...row, clanId: null, clanName: null };
+      return { ...row, clanId: hit.clanId, clanName: hit.clanName };
+    };
 
     // Unrestricted ONLY for real admin access. Everyone else is confined to the
     // clans they mentor — and to none at all if they mentor none, which is the
@@ -282,11 +338,21 @@ class CertificateService {
     const buildMenteeRow = (m) => {
       const review = reviewMap.get(m.id);
       const aiEval = aiResultMap[m.id];
+      const issuedTiers = issuedMap[m.id] || [];
+      const issuedTier = issuedTiers[issuedTiers.length - 1] || null;
+      // Once sent, the issued credential is the final answer. Showing an old
+      // AI/review "No certificate" decision beside an issued badge made the
+      // roster contradict itself after a direct admin issuance.
+      if (issuedTier) {
+        const evidenceScore = review?.aiMatchScore ?? (Number(aiEval?.match_score) || 0);
+        return { ...m, assignedDecision: 'award', assignedTier: issuedTier,
+          tierMatches: { [issuedTier]: evidenceScore }, criteriaMatch: evidenceScore, issuedTiers };
+      }
       // The dispatched assignment remains authoritative until explicitly reviewed.
       if (review) {
         const tier = review.decision === 'no_certificate' ? null : (review.finalTier ?? review.aiTier);
         return { ...m, assignedDecision: review.decision, assignedTier: tier, tierMatches: tier ? { [tier]: review.aiMatchScore ?? 0 } : {},
-          criteriaMatch: review.aiMatchScore, issuedTiers: issuedMap[m.id] || [] };
+          criteriaMatch: review.aiMatchScore, issuedTiers };
       }
       if (hasAiRun && aiEval) {
         return {
@@ -295,7 +361,7 @@ class CertificateService {
           assignedTier: aiEval.certificate_tier || null,
           tierMatches: aiEval.certificate_tier ? { [aiEval.certificate_tier]: Number(aiEval.match_score) || 0 } : {},
           criteriaMatch: Number(aiEval.match_score) || 0,
-          issuedTiers: issuedMap[m.id] || []
+          issuedTiers
         };
       }
       return {
@@ -304,7 +370,7 @@ class CertificateService {
         assignedDecision: 'undecided',
         tierMatches: {},
         criteriaMatch: null,
-        issuedTiers: issuedMap[m.id] || []
+        issuedTiers
       };
     };
 
@@ -371,7 +437,7 @@ class CertificateService {
    * Scoped like every other read: a mentor sees the people they mentor, an
    * admin sees everyone, and a mentee can open their own.
    */
-  async getMenteeEvidence(templateId, menteeId, user) {
+  async getMenteeEvidence(templateId, menteeId, user, { clanId: preferredClanId = null } = {}) {
     const startedAt = Date.now();
 
     /**
@@ -397,18 +463,43 @@ class CertificateService {
 
     const criteria = sortCriteriaByPriority(Array.isArray(template.criteria) ? template.criteria : []);
 
-    const membership = await models.ClanMembership.findOne({
-      where: { userId: menteeId, role: 'mentee', status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES } },
-      include: [{
-        model: models.Clan, as: 'clan',
-        where: template.programId ? { programId: template.programId } : undefined,
-        attributes: ['id', 'name'],
-        required: Boolean(template.programId)
-      }]
-    });
-    const clanId = membership?.clan?.id ?? null;
+    let clanId = null;
+    let selectedClan = null;
+    if (preferredClanId) {
+      const preferred = await models.Clan.findByPk(preferredClanId, { attributes: ['id', 'name', 'kind'] });
+      if (preferred?.kind === 'standing') {
+        const mem = await models.ClanMembership.findOne({
+          where: {
+            userId: menteeId,
+            clanId: preferredClanId,
+            role: 'mentee',
+            status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES },
+          },
+          attributes: ['clanId'],
+        });
+        if (mem) {
+          clanId = preferredClanId;
+          selectedClan = { id: preferred.id, name: preferred.name };
+        }
+      }
+    }
+    if (!clanId) {
+      const membership = await models.ClanMembership.findOne({
+        where: { userId: menteeId, role: 'mentee', status: { [Op.in]: VISIBLE_MEMBERSHIP_STATUSES } },
+        include: [{
+          model: models.Clan, as: 'clan',
+          where: { kind: 'cohort', ...(template.programId ? { programId: template.programId } : {}) },
+          attributes: ['id', 'name'],
+          required: Boolean(template.programId)
+        }]
+      });
+      if (membership?.clan) {
+        clanId = membership.clan.id;
+        selectedClan = { id: membership.clan.id, name: membership.clan.name };
+      }
+    }
 
-    const [metrics] = await aggregateMenteeData([menteeId], clanId);
+    const [metrics] = await aggregateMenteeData([menteeId], clanId, template.programId);
     const { maxEligibleTier, hardChecks } = preCheckHardConstraints(metrics, criteria);
 
     /**
@@ -475,7 +566,7 @@ class CertificateService {
         email: mentee.email,
         profilePictureUrl: mentee.profilePictureUrl
       },
-      clan: membership?.clan ? { id: membership.clan.id, name: membership.clan.name } : null,
+      clan: selectedClan,
       criteria: criteria.map((c) => ({
         id: c.id,
         name: c.name,
@@ -484,7 +575,8 @@ class CertificateService {
         minCompletionRate: c.minCompletionRate ?? null,
         minOnTimeRate:     c.minOnTimeRate     ?? null,
         minAvgRating:      c.minAvgRating      ?? null,
-        minAttendanceRate: c.minAttendanceRate ?? null
+        minAttendanceRate: c.minAttendanceRate ?? null,
+        reviewChecklist: Array.isArray(c.reviewChecklist) ? c.reviewChecklist : []
       })),
       metrics,
       roadmaps,
@@ -492,6 +584,7 @@ class CertificateService {
       ai,
       verification: verification ? {
         status:         verification.status,
+        stage:          verification.stage,
         aiTier:         verification.aiTier,
         aiMatchScore:   verification.aiMatchScore,
         finalTier:      verification.finalTier,
@@ -500,6 +593,7 @@ class CertificateService {
         decisionHistory: user?.id === menteeId ? [] : verification.decisionHistory || [],
         overridden:     verification.overridden,
         overrideReason: verification.overrideReason,
+        criteriaChecks: Array.isArray(verification.criteriaChecks) ? verification.criteriaChecks : [],
         verifiedAt:     verification.verifiedAt,
         verifiedBy:     verification.verifier
           ? `${verification.verifier.firstName || ''} ${verification.verifier.lastName || ''}`.trim()
@@ -652,7 +746,7 @@ class CertificateService {
   }
 
 
-  async runAIEvaluation(id, queryMentorId, user, { clanId = null } = {}) {
+  async runAIEvaluation(id, queryMentorId, user, { clanId = null, menteeIds: requestedMenteeIds = null } = {}) {
     const template = await models.CertificateTemplate.findOne({ where: { id, status: 'active' } });
     if (!template) throw new NotFoundError('Certificate template not found');
 
@@ -663,13 +757,50 @@ class CertificateService {
     // nobody else's — this is the path that used to hand a co-mentor the entire
     // programme ("0 / 623") because it decided scope from `user.role`.
     const { activeMentees } = await this.getScopedMenteesForTemplate(programId, user, { clanId });
-    const mentees = activeMentees;
+    // Never trust IDs supplied by the browser. Selection is intersected with
+    // the active, role-scoped roster so an admin/mentor cannot evaluate a
+    // hidden recipient from another programme or clan by changing the request.
+    const requested = Array.isArray(requestedMenteeIds)
+      ? new Set(requestedMenteeIds.filter((value) => typeof value === 'string' && value.length > 0))
+      : null;
+    const mentees = requested
+      ? activeMentees.filter((mentee) => requested.has(mentee.id))
+      : activeMentees;
 
     if (mentees.length === 0) {
       return { total: 0, runId: null, data: [] };
     }
 
-    const menteeIds = mentees.map(m => m.id);
+    const scopedMenteeIds = mentees.map(m => m.id);
+    const [issuedRows, verificationRows, approvedClanRows] = await Promise.all([
+      models.CertificateInstance.findAll({
+        where: { templateId: id, menteeId: { [Op.in]: scopedMenteeIds } },
+        attributes: ['menteeId'], raw: true
+      }),
+      models.CertificateVerification.findAll({
+        where: { templateId: id, menteeId: { [Op.in]: scopedMenteeIds } },
+        attributes: ['menteeId', 'clanId', 'status', 'stage'], raw: true
+      }),
+      models.CertificateClanApproval.findAll({ where: { templateId: id }, attributes: ['clanId'], raw: true })
+    ]);
+    const issuedIds = new Set(issuedRows.map((row) => row.menteeId));
+    const approvedClanIds = new Set(approvedClanRows.map((row) => row.clanId));
+    const reviewedIds = new Set(verificationRows
+      .filter((row) => row.status === 'verified' || row.stage === 'admin_approved' || approvedClanIds.has(row.clanId))
+      .map((row) => row.menteeId));
+    const menteeIds = scopedMenteeIds.filter((menteeId) => !issuedIds.has(menteeId) && !reviewedIds.has(menteeId));
+    const skipped = {
+      issued: issuedIds.size,
+      reviewedOrApproved: scopedMenteeIds.filter((id) => !issuedIds.has(id) && reviewedIds.has(id)).length
+    };
+    skipped.total = skipped.issued + skipped.reviewedOrApproved;
+
+    if (menteeIds.length === 0) {
+      return { total: 0, runId: null, data: [], skipped };
+    }
+
+    // Replace an older unfinished run only after we know there is real work.
+    await models.AIEvaluationQueue.destroy({ where: { templateId: id } });
 
     // An admin run is programme-wide and carries no clan — but only from the
     // admin portal; a run started on a mentor screen is that mentor's clans.
@@ -677,7 +808,7 @@ class CertificateService {
       const { runId, total } = await this.enqueueEvaluation(
         id, menteeIds, user.id, criteria, null
       );
-      return { runId, total };
+      return { runId, total, skipped };
     }
 
     const clanIds = await this.getMentorScopedMenteeClans(user, programId, { clanId });
@@ -689,7 +820,7 @@ class CertificateService {
       const { runId, total } = await this.enqueueEvaluation(
         id, menteeIds, user.id, criteria, clanIds[0]
       );
-      return { runId, total };
+      return { runId, total, skipped };
     }
 
     const menteeClanMap = new Map();
@@ -725,7 +856,7 @@ class CertificateService {
       total += r.total;
     }
 
-    return { runId: sharedRunId, total };
+    return { runId: sharedRunId, total, skipped };
   }
 
   async getAIEvaluationStatus(runId, templateId) {
@@ -745,7 +876,7 @@ class CertificateService {
     }
 
     if (!targetRunId) {
-      return { isDone: true, runId: null, total: 0, completed: 0, failed: 0, pending: 0, data: [] };
+      return { isDone: true, runId: null, total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, data: [] };
     }
 
     const jobs = await models.AIEvaluationQueue.findAll({
@@ -755,7 +886,7 @@ class CertificateService {
     });
 
     if (jobs.length === 0) {
-      return { isDone: true, runId: targetRunId, total: 0, completed: 0, failed: 0, pending: 0, data: [] };
+      return { isDone: true, runId: targetRunId, total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, data: [] };
     }
 
     const total = jobs.length;
@@ -764,8 +895,9 @@ class CertificateService {
     const pending = jobs.filter(j => j.status === 'pending' || j.status === 'processing').length;
     const isDone = pending === 0;
 
+    const skipped = jobs.filter(j => j.status === 'completed' && j.result?._skipped).length;
     const completedResults = jobs
-      .filter(j => j.status === 'completed' && j.result)
+      .filter(j => j.status === 'completed' && j.result && !j.result._skipped)
       .map(j => j.result);
 
     const enrichedResults = await enrichEvaluationResults(completedResults);
@@ -776,6 +908,7 @@ class CertificateService {
       total,
       completed,
       failed,
+      skipped,
       pending,
       data: enrichedResults,
       ranAt: isDone ? new Date().toISOString() : null
@@ -876,7 +1009,9 @@ class CertificateService {
           desc:       t.description ? t.description.slice(0, 300) : undefined,
           rating:     t.rating,
           difficulty: t.difficulty,
-          points_pct: t.pointsPct
+          points_pct: t.pointsPct,
+          submission_evidence: t.status === 'completed' ? t.submissionEvidence : undefined,
+          mentor_evidence: t.status === 'completed' ? t.mentorEvidence : undefined
         })),
         blockers: {
           total:            item.menteePayload.blockers?.total            ?? 0,
@@ -1026,9 +1161,19 @@ class CertificateService {
         Array.isArray(aiItem.custom_rules_check) ? aiItem.custom_rules_check
           : (Array.isArray(aiItem.customRulesCheck) ? aiItem.customRulesCheck : [])
       ).map(crc => ({
+        tierId:   String(crc.tier_id || crc.tierId || '').trim(),
         rule:     String(crc.rule || crc.name || 'Custom Qualification Rule').trim(),
         passed:   Boolean(crc.passed ?? crc.status === 'passed'),
         evidence: String(crc.evidence || crc.reason || '').trim()
+      }));
+      const criteriaChecks = (
+        Array.isArray(aiItem.criteria_checks) ? aiItem.criteria_checks
+          : (Array.isArray(aiItem.criteriaChecks) ? aiItem.criteriaChecks : [])
+      ).map(check => ({
+        tierId: String(check.tier_id || check.tierId || '').trim(),
+        item: String(check.item || check.criterion || '').trim(),
+        passed: Boolean(check.passed ?? check.status === 'passed'),
+        evidence: String(check.evidence || check.reason || '').trim()
       }));
 
       const blockersAnalysisObj = aiItem.blockers_analysis || aiItem.blockersAnalysis || {};
@@ -1036,29 +1181,60 @@ class CertificateService {
       let qualifiedTier = null;
       const normalizedMatched = matchedKw.map(k => String(k).toLowerCase());
       const hasKeywordEvidence = Array.isArray(aiItem.matched_keywords) || Array.isArray(aiItem.matchedKeywords);
+      const tierChecks = [];
 
       for (const tierConfig of sortedCriteria) {
         const tierId = tierConfig.id;
+        const hardPassed = Object.values(livePreCheck.hardChecks[tierId] || {}).every(Boolean);
+        const requiredKw = Array.isArray(tierConfig.keywords) ? tierConfig.keywords : [];
+        const unfulfilledKw = requiredKw.filter(kw => !normalizedMatched.includes(String(kw).toLowerCase()));
+        const configuredRule = String(tierConfig.customRule || '').trim();
+        const ruleCheck = configuredRule
+          ? customRulesCheck.find((check) => check.tierId === tierId || check.rule.toLowerCase() === configuredRule.toLowerCase())
+          : null;
+        const ruleProven = configuredRule
+          ? ruleCheck?.passed === true && Boolean(ruleCheck.evidence)
+          : true;
+        const requiredChecklist = Array.isArray(tierConfig.reviewChecklist)
+          ? tierConfig.reviewChecklist.map((item) => String(item).trim()).filter(Boolean)
+          : [];
+        const checklistResults = requiredChecklist.map((item) => criteriaChecks.find((check) =>
+          check.tierId === tierId && check.item.toLowerCase() === item.toLowerCase()
+        ));
+        const checklistComplete = checklistResults.every((check) => check?.passed === true && Boolean(check.evidence));
 
-        if (!Object.values(livePreCheck.hardChecks[tierId] || {}).every(Boolean)) {
+        tierChecks.push({
+          tier_id: tierId,
+          hard_constraints_passed: hardPassed,
+          keywords_passed: requiredKw.length === 0 || (hasKeywordEvidence && unfulfilledKw.length === 0),
+          missing_keywords: unfulfilledKw,
+          custom_rule: configuredRule || null,
+          custom_rule_passed: ruleProven,
+          custom_rule_evidence: ruleCheck?.evidence || null,
+          checklist_passed: checklistComplete,
+          checklist: requiredChecklist.map((item, index) => ({
+            item,
+            passed: checklistResults[index]?.passed === true && Boolean(checklistResults[index]?.evidence),
+            evidence: checklistResults[index]?.evidence || null
+          }))
+        });
+
+        if (!hardPassed) {
           continue;
         }
 
-        const requiredKw = Array.isArray(tierConfig.keywords) ? tierConfig.keywords : [];
-        if ((requiredKw.length > 0 && !hasKeywordEvidence) || (tierConfig.customRule?.trim() && !customRulesCheck.length)) {
+        if ((requiredKw.length > 0 && !hasKeywordEvidence) || (configuredRule && !ruleCheck) ||
+            (requiredChecklist.length > 0 && checklistResults.some((check) => !check))) {
           return { menteeId, result: this.buildFallbackResult(menteePayload, livePreCheck) };
         }
-        const unfulfilledKw = requiredKw.filter(kw => !normalizedMatched.includes(String(kw).toLowerCase()));
         if (unfulfilledKw.length > 0) {
           continue;
         }
 
-        if (tierConfig.customRule?.trim()) {
-          const failedRule = customRulesCheck.some(c => c.passed === false);
-          if (failedRule) {
-            continue;
-          }
+        if (configuredRule && !ruleProven) {
+          continue;
         }
+        if (!checklistComplete) continue;
 
         qualifiedTier = tierId;
         break;
@@ -1083,6 +1259,7 @@ class CertificateService {
 
       const result = {
         mentee_id:            menteeId,
+        clan_id:              menteePayload.clan_id || null,
         decision:             validTier ? 'award' : 'no_certificate',
         is_eligible:          Boolean(validTier),
         certificate_tier:     validTier,
@@ -1090,6 +1267,11 @@ class CertificateService {
         matched_keywords:     matchedKw,
         missing_keywords:     missingKw,
         custom_rules_check:   customRulesCheck,
+        criteria_checks:      criteriaChecks,
+        tier_checks:          tierChecks,
+        evaluation_summary:   validTier
+          ? `Award ${sortedCriteria.find((tier) => tier.id === validTier)?.name || validTier}: hard thresholds, required keywords, custom rule, and configured checklist are satisfied.`
+          : 'No configured certificate tier has complete evidence for every required threshold, keyword, custom rule, and checklist item.',
         overall_percentage:   Math.min(100, Math.max(0, Number(menteePayload.normalized_score) || 0)),
         completion_rate:      menteePayload.completion_rate,
         on_time_rate:         menteePayload.on_time_rate,
@@ -1119,6 +1301,7 @@ class CertificateService {
 
     return {
       mentee_id:       menteePayload.mentee_id,
+      clan_id:         menteePayload.clan_id || null,
       _failed: true,
       decision: 'undecided',
       is_eligible: false,
@@ -1150,9 +1333,8 @@ class CertificateService {
   async enqueueEvaluation(templateId, menteeIds, triggeredBy, criteria, clanId = null, runId = null) {
     const sortedCriteria = sortCriteriaByPriority(criteria);
 
-    await models.AIEvaluationQueue.destroy({ where: { templateId } });
-
-    const payloads = await aggregateMenteeData(menteeIds, clanId);
+    const template = await models.CertificateTemplate.findByPk(templateId, { attributes: ['programId'] });
+    const payloads = await aggregateMenteeData(menteeIds, clanId, template?.programId);
     const jobRunId = runId || uuidv4();
 
     const queueRows = payloads.map(payload => {
@@ -1457,7 +1639,8 @@ class CertificateService {
    * here, so this throwing means that gate has a hole — better a failed batch
    * than another round of certificates nobody confirmed.
    */
-  _requireReviewedTier(verifiedTiers, menteeId, requestedTier, hasRound) {
+  _requireReviewedTier(verifiedTiers, menteeId, requestedTier, hasRound, adminOverrideReview = false) {
+    if (adminOverrideReview) return requestedTier;
     if (verifiedTiers.has(menteeId)) return verifiedTiers.get(menteeId);
     // No review round on this template: the caller's tier is the only grade
     // there is, and issuing directly is a real workflow.
@@ -1467,7 +1650,7 @@ class CertificateService {
     );
   }
 
-  async issueCertificates({ templateId, menteeIds, mentorId, tier, recipients }, userId, user = null) {
+  async issueCertificates({ templateId, menteeIds, mentorId, tier, recipients, adminOverrideReview = false }, userId, user = null) {
     if (!templateId) {
       throw new ValidationError('Template ID is required');
     }
@@ -1485,6 +1668,11 @@ class CertificateService {
       if (!template) {
         throw new NotFoundError('Certificate template not found');
       }
+      const isAdmin = await authzService.hasAdminAccess(user);
+      const adminBypass = Boolean(adminOverrideReview && isAdmin);
+      if (adminOverrideReview && !isAdmin) {
+        throw new ForbiddenError('Only an admin can bypass mentor verification');
+      }
 
       // Issuing is a WRITE and the recipient list comes straight from the
       // request body, so it has to be checked against what this user actually
@@ -1493,7 +1681,30 @@ class CertificateService {
       const requested = Array.isArray(recipients) && recipients.length > 0
         ? recipients.map((r) => r.menteeId)
         : (Array.isArray(menteeIds) ? menteeIds : []);
-      const scope = await this.resolveMenteeScope(user, { programId: template.programId });
+
+      // Standee rounds stay issuable after program close; cohort closeout does not.
+      let standingClanId = null;
+      if (requested.length) {
+        const verifClans = await models.CertificateVerification.findAll({
+          where: { templateId, menteeId: { [Op.in]: requested } },
+          attributes: ['clanId'],
+          transaction: t,
+          raw: true,
+        });
+        const ids = [...new Set(verifClans.map((r) => r.clanId).filter(Boolean))];
+        if (ids.length === 1) {
+          const c = await models.Clan.findByPk(ids[0], { attributes: ['id', 'kind'], transaction: t });
+          if (c?.kind === 'standing') standingClanId = c.id;
+        }
+      }
+      if (!standingClanId && template.program?.closedAt && !await authzService.hasAdminAccess(user)) {
+        throw new ForbiddenError('Only an admin can issue certificates after program close');
+      }
+
+      const scope = await this.resolveMenteeScope(user, {
+        programId: template.programId,
+        clanId: standingClanId,
+      });
       if (scope !== null) {
         const allowed = new Set(scope);
         const refused = [...new Set(requested.filter((id) => id && !allowed.has(id)))];
@@ -1504,15 +1715,30 @@ class CertificateService {
         }
       }
 
-      // The mentor's sign-off wins over whatever tier the caller sent. The
-      // review round exists precisely so a human's correction is what gets
-      // issued — an admin clicking Issue from a stale screen must not quietly
-      // revert it to the AI's grade.
+      // A reviewed tier wins for ordinary mentor/admin requests. The admin UI
+      // can explicitly acknowledge a bypass; only that path uses the badge in
+      // the request and records an admin-approved issuance decision below.
       const verifiedTiers = await certificateVerificationService.resolveTiers(templateId, requested);
       const aiNoCertificateIds = new Set((template.aiEvaluation?.results || [])
         .filter(result => result.decision === 'no_certificate').map(result => result.mentee_id || result.id));
-      const excludedIds = new Set(requested.filter(id => verifiedTiers.has(id)
-        ? verifiedTiers.get(id) === null : aiNoCertificateIds.has(id)));
+      const requestedTierByMentee = new Map(
+        Array.isArray(recipients)
+          ? recipients.map((recipient) => [recipient.menteeId, recipient.tier])
+          : requested.map((menteeId) => [menteeId, tier])
+      );
+      if (adminBypass) {
+        const validTierIds = new Set((template.criteria || []).map((item) => item.id));
+        const invalidTier = [...requestedTierByMentee.values()].find((value) =>
+          !['__no_certificate__', 'no_certificate'].includes(value) && !validTierIds.has(value)
+        );
+        if (invalidTier) throw new ValidationError('The selected certificate badge is not part of this template.');
+      }
+      const adminBypassedIds = new Set(adminBypass
+        ? requested.filter((id) => !verifiedTiers.has(id) || verifiedTiers.get(id) !== requestedTierByMentee.get(id))
+        : []);
+      const excludedIds = new Set(requested.filter(id => adminBypass
+        ? ['__no_certificate__', 'no_certificate'].includes(requestedTierByMentee.get(id))
+        : (verifiedTiers.has(id) ? verifiedTiers.get(id) === null : aiNoCertificateIds.has(id))));
 
 
       // Nobody gets the same certificate twice.
@@ -1550,8 +1776,9 @@ class CertificateService {
        */
       const sendable = requested.filter((id) => !alreadyIssuedIds.has(id) && !excludedIds.has(id));
       const hasRound = await certificateVerificationService.hasReviewRound(templateId, { transaction: t });
-      const { unreviewed, unapproved } = await certificateVerificationService
-        .sendBlockers(templateId, sendable, user, { transaction: t });
+      const { unreviewed, unapproved } = adminBypass
+        ? { unreviewed: [], unapproved: [] }
+        : await certificateVerificationService.sendBlockers(templateId, sendable, user, { transaction: t });
       if (unreviewed.length) {
         throw new ForbiddenError(
           unreviewed.length === sendable.length
@@ -1580,8 +1807,8 @@ class CertificateService {
           // read `|| 'participation'`, which handed a certificate to two people
           // who had no review row at all. blockedRecipients now refuses them
           // before this line; the throw is the backstop if it ever does not.
-          tier:      this._requireReviewedTier(verifiedTiers, r.menteeId, r.tier, hasRound),
-          metadata:  {}
+          tier:      this._requireReviewedTier(verifiedTiers, r.menteeId, r.tier, hasRound, adminBypass),
+          metadata:  adminBypassedIds.has(r.menteeId) ? { adminReviewBypassed: true } : {}
         }));
       } else {
         if (!Array.isArray(menteeIds) || menteeIds.length === 0) {
@@ -1594,8 +1821,8 @@ class CertificateService {
           mentorId: mentorId || null,
           issuedBy: userId,
           imageUrl: null,
-          tier:     this._requireReviewedTier(verifiedTiers, menteeId, tier, hasRound),
-          metadata: {}
+          tier:     this._requireReviewedTier(verifiedTiers, menteeId, tier, hasRound, adminBypass),
+          metadata: adminBypassedIds.has(menteeId) ? { adminReviewBypassed: true } : {}
         }));
       }
 
@@ -1613,6 +1840,17 @@ class CertificateService {
         return { instances: [], count: 0, skipped, skippedNoCertificate, alreadyIssued: skippedNoCertificate === 0 };
       }
 
+      if (adminBypassedIds.size) {
+        await certificateVerificationService.recordAdminIssuanceDecisions(
+          template,
+          instancesData
+            .filter((instance) => adminBypassedIds.has(instance.menteeId))
+            .map((instance) => ({ menteeId: instance.menteeId, tier: instance.tier })),
+          user,
+          { transaction: t }
+        );
+      }
+
       const instances = await this._createWithNumbers(instancesData, t);
       await t.commit();
 
@@ -1625,7 +1863,8 @@ class CertificateService {
         instances: instances.map(i => ({ id: i.id, menteeId: i.menteeId })),
         count: instances.length,
         skippedNoCertificate,
-        skipped
+        skipped,
+        reviewBypassed: instances.filter((instance) => adminBypassedIds.has(instance.menteeId)).length
       };
     } catch (err) {
       await t.rollback();
@@ -1820,6 +2059,8 @@ class CertificateService {
     }
     const instance = await models.CertificateInstance.findOne({ where: { id } });
     if (!instance) throw new NotFoundError('Certificate instance not found');
+    const template = await models.CertificateTemplate.findByPk(instance.templateId, { include: [{ model: models.Program, as: 'program' }] });
+    if (template?.program?.closedAt && !await authzService.hasAdminAccess(user)) throw new ForbiddenError('Only an admin can revoke certificates after program close');
 
     await this.assertCanActOnMentee(
       user, instance.menteeId, 'You can only revoke certificates for mentees in your clan'

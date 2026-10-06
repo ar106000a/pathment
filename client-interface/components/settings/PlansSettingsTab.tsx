@@ -11,6 +11,7 @@ import { useConfirm } from '@/lib/context/ConfirmContext';
 const LABELS: Record<string, string> = {
   certificates: 'Certificates', aiEvaluation: 'AI evaluation', customBranding: 'Custom branding',
   customDomain: 'Custom domain', advancedAnalytics: 'Advanced analytics', sso: 'Single sign-on',
+  programCompletionStanding: 'Standing clan requests',
 };
 
 export function PlansSettingsTab() {

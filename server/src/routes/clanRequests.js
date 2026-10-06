@@ -6,12 +6,44 @@ const { requirePermission, requirePermissionMinScope } = require('../middlewares
 const { PERMISSIONS } = require('../config/permissions');
 const authzService = require('../services/authzService');
 const { models } = require('../db');
+const { validateBody, validateParams } = require('../middlewares/validate');
+const clanRequestValidation = require('../validations/clanRequestValidation');
 
 const adminOnly = [authenticate, requirePermissionMinScope(PERMISSIONS.CLAN_MANAGE_MEMBERS)];
 // Clan-scoped: admins (org) pass anywhere; a LEAD MENTOR passes for their own clan.
 const onTargetClan = (getClanId) => requirePermission(
   PERMISSIONS.CLAN_MANAGE_MEMBERS,
   async (req) => authzService.scopeOfClan(await getClanId(req))
+);
+
+/**
+ * Standing clan requests (after formal program close)
+ */
+router.get(
+  '/standing/eligible-programs',
+  authenticate,
+  c.listStandingEligiblePrograms
+);
+
+router.get(
+  '/standing',
+  authenticate,
+  c.listStandingRequests
+);
+
+router.post(
+  '/standing',
+  authenticate,
+  validateBody(clanRequestValidation.standingRequest),
+  c.createStandingRequest
+);
+
+router.post(
+  '/standing/:id/decision',
+  authenticate,
+  validateParams(clanRequestValidation.idParams),
+  validateBody(clanRequestValidation.standingDecision),
+  c.decideStandingRequest
 );
 
 router.get('/', adminOnly, c.overview);

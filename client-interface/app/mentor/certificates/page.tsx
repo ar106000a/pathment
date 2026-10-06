@@ -758,7 +758,7 @@ export default function MentorCertificatesPage() {
     }
     const excludedCount = recipients.filter(r => reviewRows?.[r.menteeId]?.decision === 'no_certificate').length;
     if (excludedCount && !(await confirm({
-      title: 'Exclude recipients with no certificate?',
+      title: 'Exclude recipients without a certificate?',
       description: `${excludedCount} selected mentee(s) will receive no certificate. Only awarded certificates will be sent.`
     }))) return;
 

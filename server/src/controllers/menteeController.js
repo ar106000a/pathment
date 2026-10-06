@@ -154,20 +154,21 @@ const getMenteeById = catchAsync(async (req, res) => {
   // mentee's active clan(s) — the clan's lead mentor — and pull co-mentors too.
   // Mirrors getMentorById's clan-first approach. All queries are batched.
   const clanMemberships = await models.ClanMembership.findAll({
-    where: { userId: id, status: 'active', role: 'mentee' },
+    where: { userId: id, status: { [Op.in]: ['active', 'paused'] }, role: 'mentee' },
     include: [{
       model: models.Clan,
       as: 'clan',
-      attributes: ['id', 'name', 'programId', 'leadMentorId'],
+      attributes: ['id', 'name', 'programId', 'leadMentorId', 'frozenAt', 'kind'],
       include: [{ model: models.Program, as: 'program', attributes: ['id', 'name'] }],
     }],
   }).catch(() => []);
 
-  const clans = clanMemberships.map((m) => m.clan).filter(Boolean);
+  // Match mentee ClanContext: live (non-frozen) first — usually standing — then name.
+  const clans = clanMemberships.map((m) => m.clan).filter(Boolean)
+    .sort((a, b) => Number(!!a.frozenAt) - Number(!!b.frozenAt) || String(a.name || '').localeCompare(String(b.name || '')));
   const clanIds = [...new Set(clans.map((c) => c.id))];
-  // Primary (current) clan = the first active membership's clan.
   const currentClan = clans[0]
-    ? { id: clans[0].id, name: clans[0].name, programId: clans[0].programId }
+    ? { id: clans[0].id, name: clans[0].name, programId: clans[0].programId, kind: clans[0].kind, frozenAt: clans[0].frozenAt }
     : null;
 
   // Assigned mentor = the (current) clan's lead mentor. Collect lead mentors

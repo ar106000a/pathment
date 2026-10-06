@@ -2,7 +2,7 @@ const taskService = require('../services/taskService');
 const authzService = require('../services/authzService');
 const { successResponse } = require('../utils/responses');
 const { catchAsync } = require('../middlewares/errorHandler');
-const { requestedClanId } = require('../middlewares/portalScope');
+const { requestedClanId, assertMatchesActiveClan } = require('../middlewares/portalScope');
 
 /**
  * Auto-assign week tasks to mentee
@@ -110,6 +110,9 @@ exports.getTaskById = catchAsync(async (req, res) => {
   if (!allowed) {
     return res.status(403).json({ success: false, message: 'Forbidden' });
   }
+
+  // Dual-clan: selected Standee/cohort must match the task's clan (deep links).
+  assertMatchesActiveClan(req, task.clanId);
 
   res.status(200).json(successResponse('Task retrieved', { task }));
 });
